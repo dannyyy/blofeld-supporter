@@ -87,13 +87,8 @@ jobs:
         run: |
           set -euo pipefail
           DMG="Blofeld-${{ steps.version.outputs.marketing }}.dmg"
-          STAGE="$RUNNER_TEMP/dmg-stage"
-          rm -rf "$STAGE"
-          mkdir -p "$STAGE"
-          cp -R Blofeld.app "$STAGE/"
-          ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "Blofeld Supporter" -srcfolder "$STAGE" \
-            -ov -format UDZO "$DMG"
+          # Styled installer window (dark background + arrow + Applications drop target).
+          ./scripts/make-dmg.sh ./Blofeld.app "$DMG" "Blofeld Supporter"
           codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
           codesign --verify --verbose=2 "$DMG"
           echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
