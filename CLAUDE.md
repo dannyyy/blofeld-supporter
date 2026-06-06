@@ -20,6 +20,16 @@ open ./Blofeld.app              # launch (menu-bar app, no Dock icon)
 - `build-app.sh` is plain ASCII on purpose — macOS `/bin/bash` 3.2 mis-parses UTF‑8 next to `$variables`.
 - Always relaunch with `open ./Blofeld.app` (not the inner binary directly) — the SwiftUI `Settings` scene and the `MenuBarExtra` only behave correctly under a proper LaunchServices launch.
 
+`build-app.sh` signs **ad-hoc by default**. Two optional env-var groups switch it into release mode (used by the pipeline below, but they work locally too):
+- `MARKETING_VERSION` / `BUILD_VERSION` — injected into `Info.plist` (`CFBundleShortVersionString` / `CFBundleVersion`) via `PlistBuddy`. Unset → the plist's own values are kept.
+- `CODESIGN_IDENTITY` (a `Developer ID Application: …` identity) switches on the **hardened runtime** (`--options runtime`) + a secure `--timestamp`, both required for notarization, and applies `CODESIGN_ENTITLEMENTS` (`Blofeld.entitlements`, which just declares `com.apple.security.network.client`) when set. No `--deep` — the only nested item is the resource-only SwiftPM bundle.
+
+## Packaging & release
+
+- **Styled installer DMG:** `scripts/make-dmg.sh [APP] [OUT_DMG] [VOL_NAME]` builds a dark "island"-themed installer window (app icon + arrow + Applications drop target). It auto-creates a `.build/dmg-venv` with `dmgbuild`, renders a HiDPI background by running `scripts/make_dmg_background.swift` at @1x/@2x and combining them into a HiDPI TIFF (`tiffutil -cathidpicheck`), and lays out the window via `scripts/dmg_settings.py`. **Requires Python 3 + the Swift toolchain.**
+- **Fast iteration:** `scripts/preview-dmg.sh` renders a faithful mock of the installer window to a PNG and opens it (no DMG build/mount); `--dmg` also builds and opens the real DMG. Use it when tweaking `make_dmg_background.swift`.
+- **CI release** (`.github/workflows/release.yml`): pushing a `v*` tag (or manual `workflow_dispatch` with a version) on `macos-15` → imports the Developer ID cert (+ the offline Apple intermediate in `.github/certs/DeveloperIDG2CA.cer`) → `build-app.sh` (Developer ID signed) → `make-dmg.sh` → sign the DMG → `notarytool submit --wait` + `stapler staple` + `spctl` gatekeeper check → publishes a GitHub Release. Needs repo secrets: `DEVELOPER_ID_P12_BASE64`, `DEVELOPER_ID_P12_PASSWORD`, `KEYCHAIN_PASSWORD`, `AC_APPLE_ID`, `AC_PASSWORD`, `AC_TEAM_ID`.
+
 ## Testing & visual verification
 
 This environment can't click the SwiftUI `MenuBarExtra` panel (synthetic AX clicks are ignored) and `screencapture` doesn't grab hover-state cursors, so verification relies on three project-specific mechanisms:
@@ -28,7 +38,7 @@ This environment can't click the SwiftUI `MenuBarExtra` panel (synthetic AX clic
   ```bash
   BLOFELD_CONFIG_DIR=/tmp/blofeld-snap BLOFELD_SNAPSHOT=/tmp/panel.png ./Blofeld.app/Contents/MacOS/Blofeld
   ```
-  `SnapshotRunner` injects sample hosts/results so no backend is needed. `AppEnvironment.isSnapshot` swaps the vibrancy blur for a solid color (ImageRenderer can't draw `NSViewRepresentable`).
+  `SnapshotRunner` injects sample hosts/results so no backend is needed. `AppEnvironment.isSnapshot` swaps the vibrancy blur for a solid color (ImageRenderer can't draw `NSViewRepresentable`). Set `BLOFELD_SNAPSHOT_SETTINGS=1` to render `GeneralSettingsView` instead of the panel — but note `ImageRenderer` can't draw `Toggle`/`Slider`, so those come out as placeholder boxes (fine for layout checks, not for marketing screenshots).
 - **Networking/logic tests** — compile the *real* source files against a mock server with `swiftc`, e.g.:
   ```bash
   swiftc -parse-as-library Sources/Blofeld/Models/ApiModels.swift \
@@ -53,7 +63,7 @@ SwiftUI app; `@main BlofeldApp` declares a `MenuBarExtra(...).menuBarExtraStyle(
 
 **Storage** all goes through `AppPaths` (honors `BLOFELD_CONFIG_DIR`): `config.json` + backup (`ConfigStore`) and `blofeld.log` (`EventLog`, which also feeds the in-panel Activity popover).
 
-`Views/` holds the panel (`IslandPanelView`, `EndpointRowView`), `SettingsView`, and design tokens (`Theme`). `AppAssets` renders the menu-bar icon from the **vector SVG** (not the PNG) so it stays crisp as an auto-inverting template image.
+`Views/` holds the panel (`IslandPanelView`, `EndpointRowView`), `SettingsView`, and design tokens (`Theme`). `AppAssets` renders the menu-bar icon from the **vector SVG** (not the PNG) so it stays crisp as an auto-inverting template image. It resolves the SwiftPM resource bundle from `Bundle.main.resourceURL` (where `build-app.sh` copies it, into `Contents/Resources/`), **not** via `Bundle.module` — the generated `Bundle.module` accessor looks at the `.app` root and `fatalError`s when the bundle isn't there. Keep `build-app.sh`'s copy step and `AppAssets`'s lookup in sync.
 
 ## MenuBarExtra(.window) gotchas — do not reintroduce
 

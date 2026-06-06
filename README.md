@@ -1,103 +1,104 @@
+<div align="center">
+
+<img src="blofeld_scar_logo_v2.png" width="120" alt="Blofeld Supporter icon" />
+
 # Blofeld Supporter
 
-A native macOS **menu-bar-only** app that polls [NServiceBus](https://particular.net/nservicebus) / [ServiceControl](https://docs.particular.net/servicecontrol/) endpoints and surfaces how many error (dead-letter) messages are piling up per endpoint — shown in a dark, animated "island"-style dropdown panel.
+**Keep an eye on your NServiceBus error queues — right from the macOS menu bar.**
 
-- **App name:** `Blofeld.app` (display name "Blofeld Supporter")
-- **Bundle id:** `com.danflash.blofeld-supporter`
-- **Platform:** macOS 14+ (`LSUIElement` — no Dock icon, lives in the menu bar)
+<img src="docs/images/panel.png" width="320" alt="The Blofeld Supporter dropdown panel showing endpoints and their error counts" />
 
-## What it does
+</div>
 
-- Polls one or more ServiceControl endpoints on an interval and counts **unresolved error messages** per endpoint, split into _new_ (first processing attempt) and _retried_ (subsequent attempts).
-- Fires a notification only when an endpoint's error count **increases**.
-- Builds a [ServicePulse](https://docs.particular.net/servicepulse/) deep link for each endpoint group, and can trigger a **retry** of a group's errors right from the panel.
-- Handles hosts sitting behind an **OAuth2 Proxy**: when a request comes back `401/403` or returns HTML, an in-app `WKWebView` opens for sign-in and the captured `_oauth2_proxy` cookie is reused for subsequent API calls.
+---
 
-## Build & run
+## What is it?
 
-There is **no Xcode project** — the app builds with Swift Package Manager plus a bundling script.
+Blofeld Supporter is a tiny macOS app that lives in your **menu bar** and quietly watches your
+[NServiceBus](https://particular.net/nservicebus) / [ServiceControl](https://docs.particular.net/servicecontrol/)
+endpoints. Whenever messages start piling up in an error (dead-letter) queue, you see it at a glance —
+no need to keep a ServicePulse tab open all day.
+
+Click the menu-bar icon and a dark, compact panel drops down showing every endpoint you monitor and how
+many errors it has, split into **new** and **already-retried**. If something is on fire, you can jump
+straight to ServicePulse or trigger a retry without leaving the panel.
+
+It has **no Dock icon and no window clutter** — just the icon in your menu bar.
+
+## Features
+
+- **At-a-glance error counts** per endpoint, grouped by host (e.g. _Production_, _Staging_).
+- **New vs. retried** breakdown so you can tell fresh failures from ones already being reprocessed.
+- **Desktop notifications** that fire only when an endpoint's error count actually *increases* — no nagging.
+- **One-click retry** of an endpoint's error group, straight from the panel.
+- **Jump to ServicePulse** for any endpoint to dig into the details.
+- **Activity log** of recent changes, viewable in the panel.
+- **Single sign-on aware** — if your ServiceControl sits behind an OAuth2 proxy, Blofeld opens a
+  sign-in window the first time and remembers your session.
+- **Configurable polling interval** and **launch-at-login**.
+
+## Requirements
+
+- macOS **14 (Sonoma)** or newer.
+- Network access to one or more **ServiceControl** instances (and their matching **ServicePulse** URLs).
+
+## Install
+
+1. Download the latest **`Blofeld-x.y.z.dmg`** from the
+   [**Releases page**](https://github.com/dannyyy/blofeld-supporter/releases/latest).
+2. Open the DMG and **drag `Blofeld Supporter` onto the `Applications` folder**.
+3. Launch it from Applications (or Spotlight). The icon appears in your menu bar — there is no Dock icon.
+
+> The release builds are **signed with a Developer ID and notarized by Apple**, so they open without
+> Gatekeeper warnings. If you build it yourself instead, macOS may ask you to confirm the first launch.
+
+## Set up your hosts
+
+The first time you open Blofeld, you'll want to tell it which endpoints to watch.
+
+1. Click the menu-bar icon, then open **Settings** (the gear).
+2. Under **Monitored Hosts**, click **＋** to add a host and give it a **Display name** (e.g. _Production_).
+3. Fill in the two URLs:
+   - **ServiceControl API** — e.g. `https://servicecontrol.example.com`
+   - **ServicePulse** — e.g. `https://servicepulse.example.com`
+4. Under **Endpoints**, add the **endpoint names** you want to watch (one per row, matching the names
+   shown in ServicePulse, e.g. `order-processor`).
+5. Repeat for as many hosts as you like.
+
+Your changes show up in the panel **immediately** — you don't have to wait for the next poll.
+
+If your ServiceControl is protected by single sign-on, Blofeld opens a browser window the first time it
+needs to authenticate. Sign in once and it reuses the session for subsequent checks.
+
+## Preferences
+
+Open **Settings** from the panel to adjust:
+
+- **Start at login** — launch Blofeld automatically when you log in.
+- **Notifications** — get alerted when new errors appear (you may need to allow Blofeld under
+  *System Settings ▸ Notifications* the first time; there's a **Send test notification** button to check).
+- **Check every** — how often Blofeld polls each endpoint.
+- **Diagnostics** — open the log file or reveal the configuration folder in Finder.
+
+## Your data & privacy
+
+Blofeld talks only to the ServiceControl/ServicePulse hosts **you** configure. Everything it stores stays
+on your Mac, in `~/Library/Application Support/com.danflash.blofeld-supporter/`:
+
+- `config.json` — your hosts, endpoints and preferences (with a one-deep backup that it restores from if
+  the file ever gets corrupted).
+- `blofeld.log` — a local activity log, also shown in the panel's Activity view.
+
+## Building from source
+
+Prefer to build it yourself? The app uses Swift Package Manager plus a small bundling script — **no Xcode
+project required**:
 
 ```bash
-swift build -c release   # compile (uses the active toolchain)
-./build-app.sh           # build + generate AppIcon.icns + assemble & ad-hoc sign Blofeld.app
-open ./Blofeld.app       # launch (menu-bar app, no Dock icon)
+swift build -c release   # compile
+./build-app.sh           # assemble & sign Blofeld.app
+open ./Blofeld.app       # launch
 ```
 
-Always relaunch with `open ./Blofeld.app` rather than running the inner binary directly — the SwiftUI `Settings` scene and `MenuBarExtra` only behave correctly under a proper LaunchServices launch.
-
-### Toolchain notes
-
-- The active **Command Line Tools** toolchain is sufficient: its macOS SDK provides SwiftUI/AppKit/WebKit, so `swift build` works without Xcode.
-- To build with full Xcode instead, accept its license once and point the build at it:
-  ```bash
-  sudo xcodebuild -license accept
-  DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./build-app.sh
-  ```
-- `build-app.sh` is intentionally plain ASCII — macOS `/bin/bash` 3.2 mis-parses UTF‑8 adjacent to `$variables`.
-
-## Configuration & storage
-
-All storage goes through `AppPaths`, which honors the `BLOFELD_CONFIG_DIR` environment variable:
-
-- `config.json` (+ a one-deep `config.backup.json`) — user-edited hosts, endpoints, and settings, managed by `ConfigStore`. It recovers from the backup if the main file is corrupt.
-- `blofeld.log` — event log (`EventLog`), which also feeds the in-panel Activity popover.
-
-> **When testing, always set `BLOFELD_CONFIG_DIR`** to a scratch directory — otherwise you will overwrite your real `config.json`.
-
-## Architecture
-
-A SwiftUI app whose `@main BlofeldApp` declares a `MenuBarExtra(...).menuBarExtraStyle(.window)` scene (the island panel) plus a `Settings` scene.
-
-**`AppState` (`@MainActor ObservableObject`) is the hub** that every view and service talks to. The panel is **derived from config**, not stored separately:
-
-- `config: AppConfig` (persisted) holds the user-edited hosts/endpoints/settings.
-- `results: [String: EndpointStatus]` holds the latest poll data, keyed by `AppState.key(hostId, endpoint)`.
-- The computed `hosts: [HostStatus]` **merges config + results**, so edits in Settings show up in the panel immediately, before the next poll. `config`'s `didSet` persists, applies launch-at-login, and debounces a poll reschedule.
-
-**Data flow:** `Poller` (async loop, re-reads the interval each tick) → `ServiceControlClient` (URLSession) → writes back via `AppState.applyResults` / `applyAuth`. `applyResults` diffs against the previous count to fire `NotificationService` only on increases, and logs to `EventLog`.
-
-### ServiceControl API
-
-- `GET /api/endpoints/<ep>/errors/?status=unresolved` — _new_ = `number_of_processing_attempts == 1`, _retried_ = `> 1`.
-- `GET /api/recoverability/groups/<Endpoint Name>` — resolves the group id by matching `title == endpoint`; used to build the ServicePulse deep link and the retry `POST .../groups/<id>/errors/retry`.
-
-### Project layout
-
-```
-Sources/Blofeld/
-  BlofeldApp.swift          @main scene declarations
-  AppState.swift            central @MainActor hub (config + results -> hosts)
-  AppAssets.swift           menu-bar icon rendered from the vector SVG
-  SnapshotRunner.swift      sample data injection for snapshot mode
-  Models/                   ApiModels, Status, Configuration
-  Views/                    IslandPanelView, EndpointRowView, SettingsView,
-                            Theme, Components, Toast
-  Services/                 ServiceControlClient, Poller, ConfigStore, AuthManager,
-                            NotificationService, LaunchAtLogin, EventLog, AppPaths
-  Resources/                blofeld_scar_logo_v2.{svg,png}
-```
-
-## Testing & visual verification
-
-There is no XCTest target. Verification relies on three project-specific mechanisms:
-
-- **Snapshot mode** — renders the panel to a PNG via `ImageRenderer`, then exits. `SnapshotRunner` injects sample hosts/results, so no backend is needed:
-  ```bash
-  BLOFELD_CONFIG_DIR=/tmp/blofeld-snap BLOFELD_SNAPSHOT=/tmp/panel.png ./Blofeld.app/Contents/MacOS/Blofeld
-  ```
-- **Networking/logic tests** — compile the real source files against a mock server with `swiftc`:
-  ```bash
-  swiftc -parse-as-library Sources/Blofeld/Models/ApiModels.swift \
-    Sources/Blofeld/Services/ServiceControlClient.swift test_main.swift -o /tmp/t && /tmp/t
-  ```
-  A throwaway Python `http.server` mocks the ServiceControl API to assert URL encoding, error counting, ServicePulse-link building, and SSO-wall detection.
-
-## `MenuBarExtra(.window)` constraints
-
-These constraints are load-bearing — each fixed a real bug:
-
-- **No continuously-running animations** in the panel (`repeatForever`, `ProgressView` spinners) — they flicker the window open/closed. Use static indicators (`StatusDot`, the refresh/retry buttons).
-- **No bare `ScrollView`** for the host list — with only a `maxHeight` it collapses to ~0 height and the body goes blank. Render the content directly so the panel sizes to it.
-- **Settings uses `HSplitView`, not `NavigationSplitView`** — the latter's sidebar toggle overlaps the window's traffic-light controls.
-- The panel forces the arrow cursor via `.onContinuousHover` (SwiftUI otherwise shows an I-beam over the non-editable panel).
-- Editing hosts uses **id-based bindings** (resolve `HostConfig`/`EndpointConfig` by `id`), never array-index bindings — index bindings crash when the array shrinks.
+For the full developer guide — architecture, the DMG/notarization release pipeline, and testing notes —
+see [`CLAUDE.md`](./CLAUDE.md).
