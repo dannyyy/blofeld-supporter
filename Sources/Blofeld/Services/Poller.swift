@@ -101,7 +101,7 @@ final class Poller {
     private func pollDatadog(queries: [MonitorQueryConfig]) async {
         guard let state, !queries.isEmpty else { return }
 
-        let availability = await pup.availability()
+        let availability = await pup.availability(sitesToTry: state.pupSitesToProbe())
         state.setPupAvailability(availability)
 
         // If pup isn't usable, surface the reason on every query and stop.

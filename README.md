@@ -98,16 +98,16 @@ and never needs API keys of its own.
    brew tap datadog-labs/pack
    brew install datadog-labs/pack/pup
    ```
-   If your org is on the EU site, also set the site for the CLI:
+2. **Sign in** to your Datadog site. If your org is on the EU site (or any non-US1 site), set `DD_SITE`
+   for the login so `pup` stores credentials for the right site:
    ```bash
-   echo 'export DD_SITE="datadoghq.eu"' >> ~/.zshrc
-   ```
-2. **Sign in:**
-   ```bash
+   export DD_SITE="datadoghq.eu"   # your site; omit for US1
    pup auth login
    ```
-3. In Blofeld, open **Settings ▸ General** and check the **Datadog CLI (pup)** box — it should show
-   _Installed & authenticated_. If not, it tells you exactly what to run.
+3. In Blofeld, open **Settings ▸ General ▸ Datadog CLI (pup)**. It should show _Installed &
+   authenticated_. Blofeld **auto-detects** your Datadog site, but if detection picks the wrong one you
+   can set it explicitly with the **Datadog site** dropdown. (A menu-bar app can't read the `DD_SITE`
+   from your shell, so Blofeld sets it itself.)
 4. Open **Settings ▸ Datadog ▸ Monitors** and add one or more **queries**. Each has a friendly name and
    a monitor search query, for example:
    - `team:blofeld status:alert` — your team's alerting monitors

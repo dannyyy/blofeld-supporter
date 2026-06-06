@@ -181,9 +181,23 @@ final class AppState: ObservableObject {
         pupAvailability = availability
     }
 
+    /// The `DD_SITE` values to probe, best-guess first. An explicit configured
+    /// site wins; otherwise try the last authenticated site, then all known
+    /// sites. Keeps the steady state to a single `pup` call while still
+    /// auto-detecting the site on a fresh machine.
+    func pupSitesToProbe() -> [String] {
+        let configured = config.datadogSite.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configured.isEmpty { return [configured] }
+        var sites: [String] = []
+        if case .ok(let site) = pupAvailability { sites.append(site) }
+        for site in DatadogSite.known where !sites.contains(site) { sites.append(site) }
+        return sites
+    }
+
     /// Re-checks the `pup` CLI off the poll loop (Settings diagnostics box).
     func refreshPupAvailability() {
-        Task { self.pupAvailability = await pupClient.availability() }
+        let sites = pupSitesToProbe()
+        Task { self.pupAvailability = await pupClient.availability(sitesToTry: sites) }
     }
 
     func applyMonitorResults(queryId: UUID, status: MonitorQueryStatus) {
@@ -207,7 +221,8 @@ final class AppState: ObservableObject {
             LaunchAtLogin.apply(config.launchAtLogin)
         }
         if old.pollSeconds != config.pollSeconds || old.hosts != config.hosts
-            || old.datadogQueries != config.datadogQueries {
+            || old.datadogQueries != config.datadogQueries
+            || old.datadogSite != config.datadogSite {
             // Drop results for endpoints / queries that no longer exist.
             pruneResults()
             // Debounce: editing a host name/URL fires a change per keystroke —

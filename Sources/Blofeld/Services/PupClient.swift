@@ -38,24 +38,31 @@ struct PupClient {
 
     // MARK: - High level
 
-    /// Whether pup is installed and authenticated; returns the site on success
-    /// (used to build monitor browser links).
-    func availability() async -> PupAvailability {
+    /// Whether pup is installed and authenticated; returns the authenticated
+    /// site on success. `sitesToTry` lists the `DD_SITE` values to probe in order
+    /// (the app has no ambient `DD_SITE`, and pup stores credentials per-site, so
+    /// we must say which site to check). The first authenticated site wins. Pass
+    /// a single explicit site to respect a user override, or the known-site list
+    /// to auto-detect. An empty string probes pup's default site.
+    func availability(sitesToTry: [String]) async -> PupAvailability {
         guard let path = pupPath else { return .notInstalled }
-        do {
-            let result = try await run(path: path, args: ["auth", "status"])
-            guard let status = try? JSONDecoder().decode(PupAuthStatus.self, from: result.stdout) else {
-                return .notAuthenticated
+        let sites = sitesToTry.isEmpty ? [""] : sitesToTry
+        var lastError: String?
+        for site in sites {
+            do {
+                let result = try await run(path: path, args: ["auth", "status"], site: site)
+                if let status = try? JSONDecoder().decode(PupAuthStatus.self, from: result.stdout),
+                   status.authenticated, let resolved = status.site, !resolved.isEmpty {
+                    return .ok(site: resolved)
+                }
+                // authenticated == false for this site — try the next one.
+            } catch PupError.timedOut {
+                return .error("pup timed out")
+            } catch {
+                lastError = PupClient.describe(error)
             }
-            if status.authenticated, let site = status.site, !site.isEmpty {
-                return .ok(site: site)
-            }
-            return .notAuthenticated
-        } catch PupError.timedOut {
-            return .error("pup timed out")
-        } catch {
-            return .error(PupClient.describe(error))
         }
+        return lastError.map { .error($0) } ?? .notAuthenticated
     }
 
     /// The mapped monitors on the fetched page plus the *total* number the query
@@ -67,7 +74,8 @@ struct PupClient {
     func searchMonitors(query: String, site: String?, perPage: Int) async throws -> MonitorSearchResult {
         guard let path = pupPath else { throw PupError.notInstalled }
         let result = try await run(path: path,
-            args: ["monitors", "search", "--query", query, "--per-page", String(perPage)])
+            args: ["monitors", "search", "--query", query, "--per-page", String(perPage)],
+            site: site)
         guard result.code == 0 else {
             let lower = result.stderr.lowercased()
             if lower.contains("401") || lower.contains("403") || lower.contains("unauthor") || lower.contains("authenticat") {
@@ -119,14 +127,19 @@ struct PupClient {
 
     private struct RunResult { let code: Int32; let stdout: Data; let stderr: String }
 
-    private func run(path: String, args: [String], timeout: TimeInterval = 25) async throws -> RunResult {
+    private func run(path: String, args: [String], site: String? = nil, timeout: TimeInterval = 25) async throws -> RunResult {
         let fullArgs = args + ["--no-agent", "--read-only", "--output", "json"]
+        // A LaunchServices-launched app inherits the launchd environment, which
+        // has no DD_SITE — so set it explicitly here (pup picks the credentials
+        // for that site). An empty/nil site leaves pup on its default site.
+        var environment = ProcessInfo.processInfo.environment
+        if let site, !site.isEmpty { environment["DD_SITE"] = site }
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: path)
                 process.arguments = fullArgs
-                process.environment = ProcessInfo.processInfo.environment
+                process.environment = environment
 
                 let outPipe = Pipe()
                 let errPipe = Pipe()

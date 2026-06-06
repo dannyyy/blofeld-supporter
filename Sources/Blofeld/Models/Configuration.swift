@@ -6,6 +6,10 @@ struct AppConfig: Codable, Equatable {
     var hosts: [HostConfig]
     /// Datadog monitor search queries to observe (via the `pup` CLI).
     var datadogQueries: [MonitorQueryConfig]
+    /// The Datadog site `pup` should use (e.g. "datadoghq.eu"). Empty = auto-detect.
+    /// A LaunchServices-launched app has no `DD_SITE` in its environment, so the
+    /// app sets it explicitly per `pup` call rather than relying on the shell.
+    var datadogSite: String
     var pollSeconds: Int
     var notificationsEnabled: Bool
     var launchAtLogin: Bool
@@ -13,6 +17,7 @@ struct AppConfig: Codable, Equatable {
     static let `default` = AppConfig(
         hosts: [],
         datadogQueries: [],
+        datadogSite: "",
         pollSeconds: 60,
         notificationsEnabled: true,
         launchAtLogin: false
@@ -21,27 +26,57 @@ struct AppConfig: Codable, Equatable {
     init(
         hosts: [HostConfig],
         datadogQueries: [MonitorQueryConfig] = [],
+        datadogSite: String = "",
         pollSeconds: Int,
         notificationsEnabled: Bool,
         launchAtLogin: Bool
     ) {
         self.hosts = hosts
         self.datadogQueries = datadogQueries
+        self.datadogSite = datadogSite
         self.pollSeconds = pollSeconds
         self.notificationsEnabled = notificationsEnabled
         self.launchAtLogin = launchAtLogin
     }
 
     // Custom decode so configs written before Datadog support (no
-    // `datadogQueries` key) still load instead of failing the whole decode —
-    // which would drop the user back to `.default` and lose their hosts.
+    // `datadogQueries` / `datadogSite` keys) still load instead of failing the
+    // whole decode — which would drop the user back to `.default` and lose
+    // their hosts. Add any future field the same way.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         hosts = try c.decode([HostConfig].self, forKey: .hosts)
         datadogQueries = try c.decodeIfPresent([MonitorQueryConfig].self, forKey: .datadogQueries) ?? []
+        datadogSite = try c.decodeIfPresent(String.self, forKey: .datadogSite) ?? ""
         pollSeconds = try c.decode(Int.self, forKey: .pollSeconds)
         notificationsEnabled = try c.decode(Bool.self, forKey: .notificationsEnabled)
         launchAtLogin = try c.decode(Bool.self, forKey: .launchAtLogin)
+    }
+}
+
+/// The Datadog sites `pup` can authenticate against (probed during auto-detect).
+/// Values are `DD_SITE` strings; see https://docs.datadoghq.com/getting_started/site/
+enum DatadogSite {
+    static let known: [String] = [
+        "datadoghq.com",       // US1
+        "us3.datadoghq.com",   // US3
+        "us5.datadoghq.com",   // US5
+        "datadoghq.eu",        // EU1
+        "ap1.datadoghq.com",   // AP1
+        "ddog-gov.com",        // US1-FED
+    ]
+
+    /// Friendly label for a site value, for the Settings picker.
+    static func label(for site: String) -> String {
+        switch site {
+        case "datadoghq.com": return "US1 (datadoghq.com)"
+        case "us3.datadoghq.com": return "US3 (us3.datadoghq.com)"
+        case "us5.datadoghq.com": return "US5 (us5.datadoghq.com)"
+        case "datadoghq.eu": return "EU1 (datadoghq.eu)"
+        case "ap1.datadoghq.com": return "AP1 (ap1.datadoghq.com)"
+        case "ddog-gov.com": return "US1-FED (ddog-gov.com)"
+        default: return site
+        }
     }
 }
 

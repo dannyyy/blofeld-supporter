@@ -438,6 +438,24 @@ private struct DatadogCliCard: View {
                 }
                 .padding(.vertical, 4)
 
+                Divider().overlay(Theme.cardStroke).padding(.vertical, 4)
+
+                HStack {
+                    Text("Datadog site")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                    Spacer()
+                    Picker("", selection: $state.config.datadogSite) {
+                        Text("Auto-detect").tag("")
+                        ForEach(DatadogSite.known, id: \.self) { site in
+                            Text(DatadogSite.label(for: site)).tag(site)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 220)
+                }
+                .padding(.vertical, 4)
+
                 if let hint = state.pupAvailability.hint {
                     Divider().overlay(Theme.cardStroke).padding(.vertical, 4)
                     Text(hint)
@@ -447,7 +465,7 @@ private struct DatadogCliCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Text("Blofeld runs `pup monitors search` (read-only) to read your monitors. The Datadog site comes from your `pup auth login`.")
+                Text("Blofeld runs `pup monitors search` (read-only) to read your monitors. Pick the Datadog site you ran `pup auth login` for — Auto-detect tries each known site. (A menu-bar app can't see the `DD_SITE` from your shell.)")
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
                     .padding(.top, 4)
