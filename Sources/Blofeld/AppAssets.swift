@@ -8,13 +8,31 @@ import SwiftUI
 /// it to a fixed small bitmap — that is what previously turned it into a blurry
 /// white disc.
 enum AppAssets {
+    /// Resolves the SwiftPM resource bundle.
+    ///
+    /// We deliberately avoid `Bundle.module`: the generated accessor only checks the
+    /// `.app` *root* and an absolute build path baked in at compile time, so inside a
+    /// packaged/signed app — where resources are sealed under `Contents/Resources` —
+    /// merely touching `Bundle.module` would `fatalError`. Instead we look in the real
+    /// locations: `Contents/Resources` (packaged .app) and the executable dir
+    /// (`swift run`), falling back to the main bundle if resources were flattened.
+    private static let resourceBundle: Bundle = {
+        let name = "Blofeld_Blofeld.bundle"
+        for base in [Bundle.main.resourceURL, Bundle.main.bundleURL] {
+            if let base, let bundle = Bundle(url: base.appendingPathComponent(name)) {
+                return bundle
+            }
+        }
+        return .main
+    }()
+
     /// Fresh vector-backed copy of the emblem.
     private static func loadEmblem() -> NSImage {
-        if let url = Bundle.module.url(forResource: "blofeld_scar_logo_v2", withExtension: "svg"),
+        if let url = resourceBundle.url(forResource: "blofeld_scar_logo_v2", withExtension: "svg"),
            let image = NSImage(contentsOf: url) {
             return image
         }
-        if let url = Bundle.module.url(forResource: "blofeld_scar_logo_v2", withExtension: "png"),
+        if let url = resourceBundle.url(forResource: "blofeld_scar_logo_v2", withExtension: "png"),
            let image = NSImage(contentsOf: url) {
             return image
         }

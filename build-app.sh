@@ -53,7 +53,11 @@ if [[ -n "${BUILD_VERSION:-}" ]]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_VERSION}" "$PLIST"
 fi
 
-# SwiftPM resource bundle (images) so Bundle.module resolves at runtime.
+# SwiftPM resource bundle (images), placed in the standard Contents/Resources so
+# codesign seals it. NOTE: the SwiftPM-generated `Bundle.module` accessor would look
+# for it at the .app ROOT instead and fatalError when it isn't there -- so AppAssets
+# deliberately resolves this bundle from Bundle.main.resourceURL rather than using
+# Bundle.module. Keep these two in sync.
 if [[ -d "$RES_BUNDLE" ]]; then
     cp -R "$RES_BUNDLE" "${BUNDLE_DIR}/Contents/Resources/"
 fi
