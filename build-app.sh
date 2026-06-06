@@ -43,13 +43,40 @@ cp "Info.plist" "${BUNDLE_DIR}/Contents/Info.plist"
 cp "$ICNS_OUT" "${BUNDLE_DIR}/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "${BUNDLE_DIR}/Contents/PkgInfo"
 
+# Optional version injection (the release pipeline derives these from the git tag /
+# run number; local builds leave them unset so Info.plist's values are kept).
+PLIST="${BUNDLE_DIR}/Contents/Info.plist"
+if [[ -n "${MARKETING_VERSION:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MARKETING_VERSION}" "$PLIST"
+fi
+if [[ -n "${BUILD_VERSION:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_VERSION}" "$PLIST"
+fi
+
 # SwiftPM resource bundle (images) so Bundle.module resolves at runtime.
 if [[ -d "$RES_BUNDLE" ]]; then
     cp -R "$RES_BUNDLE" "${BUNDLE_DIR}/Contents/Resources/"
 fi
 
-echo "-> Ad-hoc code signing"
-codesign --force --deep --sign - "$BUNDLE_DIR" >/dev/null 2>&1 || \
-    echo "   (codesign skipped/failed -- app will still run locally)"
+# Signing. Default is ad-hoc (local builds, unchanged). The release pipeline sets
+# CODESIGN_IDENTITY to the real "Developer ID Application: ..." identity, which switches
+# on the hardened runtime (--options runtime) + a secure timestamp -- both required for
+# notarization -- and applies CODESIGN_ENTITLEMENTS when provided.
+SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    echo "-> Ad-hoc code signing"
+    codesign --force --deep --sign - "$BUNDLE_DIR" >/dev/null 2>&1 || \
+        echo "   (codesign skipped/failed -- app will still run locally)"
+else
+    echo "-> Code signing with Developer ID (hardened runtime)"
+    SIGN_ARGS=(--force --options runtime --timestamp)
+    if [[ -n "${CODESIGN_ENTITLEMENTS:-}" ]]; then
+        SIGN_ARGS+=(--entitlements "$CODESIGN_ENTITLEMENTS")
+    fi
+    # No --deep: the only nested item is the resource-only SwiftPM bundle (no Mach-O),
+    # so signing the app bundle directly is correct.
+    codesign "${SIGN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$BUNDLE_DIR"
+    codesign --verify --strict --verbose=2 "$BUNDLE_DIR"
+fi
 
 echo "OK: built ${BUNDLE_DIR}"

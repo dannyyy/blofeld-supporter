@@ -1,0 +1,127 @@
+name: Release
+
+# Build, sign, notarize and publish a distributable DMG.
+# Triggered by pushing a version tag (e.g. v0.2.0), or manually via the
+# "Run workflow" button with a version input.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag, e.g. v0.2.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15   # native arm64, ships Xcode 16 / Swift 6
+    env:
+      SIGN_IDENTITY: "Developer ID Application: Danny Meier (U49RGGF556)"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          MARKETING_VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "marketing=$MARKETING_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG (marketing version $MARKETING_VERSION)"
+
+      - name: Import Developer ID signing certificate
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+
+          echo "$DEVELOPER_ID_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Leaf cert + private key, plus the public Apple intermediate (offline chain).
+          security import "$CERT_PATH" -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import "$GITHUB_WORKSPACE/.github/certs/DeveloperIDG2CA.cer" \
+            -t cert -k "$KEYCHAIN_PATH" || true
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+
+          # Make the temp keychain the one codesign searches (keep the login keychain too).
+          security list-keychains -d user -s "$KEYCHAIN_PATH" \
+            $(security list-keychains -d user | sed s/\"//g)
+
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+
+      - name: Build & sign app
+        env:
+          CODESIGN_IDENTITY: ${{ env.SIGN_IDENTITY }}
+          CODESIGN_ENTITLEMENTS: Blofeld.entitlements
+          MARKETING_VERSION: ${{ steps.version.outputs.marketing }}
+          BUILD_VERSION: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          ./build-app.sh
+          codesign --verify --strict --verbose=2 Blofeld.app
+
+      - name: Package DMG
+        id: dmg
+        run: |
+          set -euo pipefail
+          DMG="Blofeld-${{ steps.version.outputs.marketing }}.dmg"
+          STAGE="$RUNNER_TEMP/dmg-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -R Blofeld.app "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "Blofeld Supporter" -srcfolder "$STAGE" \
+            -ov -format UDZO "$DMG"
+          codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+          codesign --verify --verbose=2 "$DMG"
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+
+      - name: Notarize & staple
+        env:
+          AC_APPLE_ID: ${{ secrets.AC_APPLE_ID }}
+          AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
+          AC_TEAM_ID: ${{ secrets.AC_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          DMG="${{ steps.dmg.outputs.dmg }}"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$AC_APPLE_ID" \
+            --password "$AC_PASSWORD" \
+            --team-id "$AC_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          # Gatekeeper acceptance check (must report "Notarized Developer ID").
+          spctl -a -t open --context context:primary-signature -v "$DMG"
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: ${{ steps.dmg.outputs.dmg }}
+          generate_release_notes: true
+
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
