@@ -1,0 +1,29 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Generated app bundle (produced by build-app.sh)
+Blofeld.app/
+
+# Generated icon assets
+*.icns
+*.iconset/
+
+# Runtime config & logs (BLOFELD_CONFIG_DIR output)
+config.json
+config.backup.json
+blofeld.log
+
+# Xcode (if ever opened in Xcode)
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+xcuserdata/
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
