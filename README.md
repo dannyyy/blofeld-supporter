@@ -4,7 +4,7 @@
 
 # Blofeld Supporter
 
-**Keep an eye on your NServiceBus error queues — right from the macOS menu bar.**
+**A site-reliability companion for your macOS menu bar — watch NServiceBus error queues and Datadog monitors at a glance.**
 
 <img src="docs/images/panel.png" width="320" alt="The Blofeld Supporter dropdown panel showing endpoints and their error counts" />
 
@@ -14,33 +14,51 @@
 
 ## What is it?
 
-Blofeld Supporter is a tiny macOS app that lives in your **menu bar** and quietly watches your
+Blofeld Supporter is a tiny macOS app that lives in your **menu bar** and quietly keeps an eye on your
+services. It watches your
 [NServiceBus](https://particular.net/nservicebus) / [ServiceControl](https://docs.particular.net/servicecontrol/)
-endpoints. Whenever messages start piling up in an error (dead-letter) queue, you see it at a glance —
-no need to keep a ServicePulse tab open all day.
+endpoints **and** your [Datadog](https://www.datadoghq.com/) monitors, so you spot trouble — messages
+piling up in an error (dead-letter) queue, or a monitor going red — without keeping a tab open all day.
 
-Click the menu-bar icon and a dark, compact panel drops down showing every endpoint you monitor and how
-many errors it has, split into **new** and **already-retried**. If something is on fire, you can jump
-straight to ServicePulse or trigger a retry without leaving the panel.
+Click the menu-bar icon and a dark, compact panel drops down showing every endpoint and monitor you
+track. NServiceBus endpoints show their error counts split into **new** and **already-retried**; Datadog
+monitors show their state, alerting ones first. If something is on fire, you can jump straight to
+ServicePulse, retry an endpoint's error group, or open a monitor in Datadog — without leaving the panel.
 
-It has **no Dock icon and no window clutter** — just the icon in your menu bar.
+It has **no Dock icon and no window clutter** — just the icon in your menu bar. More integrations for
+day-to-day site reliability and DevOps are planned.
 
 ## Features
 
+### NServiceBus / ServiceControl
 - **At-a-glance error counts** per endpoint, grouped by host (e.g. _Production_, _Staging_).
 - **New vs. retried** breakdown so you can tell fresh failures from ones already being reprocessed.
-- **Desktop notifications** that fire only when an endpoint's error count actually *increases* — no nagging.
 - **One-click retry** of an endpoint's error group, straight from the panel.
 - **Jump to ServicePulse** for any endpoint to dig into the details.
-- **Activity log** of recent changes, viewable in the panel.
 - **Single sign-on aware** — if your ServiceControl sits behind an OAuth2 proxy, Blofeld opens a
   sign-in window the first time and remembers your session.
+
+### Datadog monitors
+- **Watch monitors by query** — configure one or more Datadog monitor searches (e.g.
+  `team:blofeld status:alert`); every matching monitor shows in the panel with its state.
+- **Alerting first** — alerting and warning monitors sort to the top; broad queries are capped with a
+  "+N more" line so the panel stays readable.
+- **Open in Datadog** — jump to any monitor in your browser to resolve, mute, or investigate it.
+- Powered by the [`pup`](https://github.com/DataDog/pup) CLI (read-only) — your existing Datadog login.
+
+### General
+- **Desktop notifications** that fire only when something *newly* needs attention — an endpoint's error
+  count rises, or a monitor enters alert — no nagging.
+- **Activity log** of recent changes, viewable in the panel.
 - **Configurable polling interval** and **launch-at-login**.
 
 ## Requirements
 
 - macOS **14 (Sonoma)** or newer.
-- Network access to one or more **ServiceControl** instances (and their matching **ServicePulse** URLs).
+- For NServiceBus: network access to one or more **ServiceControl** instances (and their matching
+  **ServicePulse** URLs).
+- For Datadog: the **[`pup`](https://github.com/DataDog/pup) CLI**, installed and authenticated (see
+  _Set up Datadog monitors_ below). Optional — leave it out if you only use NServiceBus.
 
 ## Install
 
@@ -70,6 +88,36 @@ Your changes show up in the panel **immediately** — you don't have to wait for
 If your ServiceControl is protected by single sign-on, Blofeld opens a browser window the first time it
 needs to authenticate. Sign in once and it reuses the session for subsequent checks.
 
+## Set up Datadog monitors
+
+Blofeld reads your Datadog monitors through the **`pup`** CLI, so it reuses your existing Datadog login
+and never needs API keys of its own.
+
+1. **Install `pup`** (one-time):
+   ```bash
+   brew tap datadog-labs/pack
+   brew install datadog-labs/pack/pup
+   ```
+   If your org is on the EU site, also set the site for the CLI:
+   ```bash
+   echo 'export DD_SITE="datadoghq.eu"' >> ~/.zshrc
+   ```
+2. **Sign in:**
+   ```bash
+   pup auth login
+   ```
+3. In Blofeld, open **Settings ▸ General** and check the **Datadog CLI (pup)** box — it should show
+   _Installed & authenticated_. If not, it tells you exactly what to run.
+4. Open **Settings ▸ Datadog ▸ Monitors** and add one or more **queries**. Each has a friendly name and
+   a monitor search query, for example:
+   - `team:blofeld status:alert` — your team's alerting monitors
+   - `service:checkout` — everything for a service
+   - `tag:"env:prod"` — a tag scope
+
+Every matching monitor appears in the panel (alerting ones first). Click a monitor's arrow to open it in
+Datadog, where you can resolve or mute it. Blofeld only ever **reads** monitors (`pup` is run with
+`--read-only`); it never changes them.
+
 ## Preferences
 
 Open **Settings** from the panel to adjust:
@@ -77,7 +125,9 @@ Open **Settings** from the panel to adjust:
 - **Start at login** — launch Blofeld automatically when you log in.
 - **Notifications** — get alerted when new errors appear (you may need to allow Blofeld under
   *System Settings ▸ Notifications* the first time; there's a **Send test notification** button to check).
-- **Check every** — how often Blofeld polls each endpoint.
+- **Check every** — how often Blofeld polls each endpoint and Datadog query.
+- **Datadog CLI (pup)** — see whether the `pup` CLI is installed and authenticated, with a hint to fix
+  it if not.
 - **Diagnostics** — open the log file or reveal the configuration folder in Finder.
 
 ## Your data & privacy

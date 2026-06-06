@@ -20,10 +20,11 @@ struct BlofeldApp: App {
             IslandPanelView()
                 .environmentObject(state)
         } label: {
-            // Auto-inverting template logo + an error count when present.
+            // Auto-inverting template logo + a count of things needing attention
+            // (NServiceBus errors + alerting Datadog monitors) when present.
             Image(nsImage: AppAssets.menuBar(pointSize: 18))
-            if state.totalErrors > 0 {
-                Text("\(state.totalErrors)")
+            if state.menuBarBadgeCount > 0 {
+                Text("\(state.menuBarBadgeCount)")
             }
         }
         .menuBarExtraStyle(.window)

@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Blofeld** (`Blofeld.app`, display name "Blofeld Supporter", bundle id `com.danflash.blofeld-supporter`) is a native macOS **menu-bar-only** app that polls NServiceBus / ServiceControl endpoints and surfaces how many error (dead-letter) messages are accumulating per endpoint, in a dark animated "island"-style dropdown panel.
+**Blofeld** (`Blofeld.app`, display name "Blofeld Supporter", bundle id `com.danflash.blofeld-supporter`) is a native macOS **menu-bar-only** site-reliability companion. In a dark animated "island"-style dropdown panel it surfaces two kinds of signal from two sources:
+
+- **NServiceBus / ServiceControl** — how many error (dead-letter) messages are accumulating per endpoint (over HTTP).
+- **Datadog monitors** — the monitors matched by user-configured search queries, alerting ones first (by shelling out to the local **`pup` CLI**, read-only).
+
+It is meant to grow more reliability/DevOps integrations over time; the architecture treats each source as a parallel, **config-derived** section in the panel (a host card per ServiceControl host, a query card per Datadog query).
 
 ## Build & run
 
@@ -38,14 +43,15 @@ This environment can't click the SwiftUI `MenuBarExtra` panel (synthetic AX clic
   ```bash
   BLOFELD_CONFIG_DIR=/tmp/blofeld-snap BLOFELD_SNAPSHOT=/tmp/panel.png ./Blofeld.app/Contents/MacOS/Blofeld
   ```
-  `SnapshotRunner` injects sample hosts/results so no backend is needed. `AppEnvironment.isSnapshot` swaps the vibrancy blur for a solid color (ImageRenderer can't draw `NSViewRepresentable`). Set `BLOFELD_SNAPSHOT_SETTINGS=1` to render `GeneralSettingsView` instead of the panel — but note `ImageRenderer` can't draw `Toggle`/`Slider`, so those come out as placeholder boxes (fine for layout checks, not for marketing screenshots).
-- **Networking/logic tests** — compile the *real* source files against a mock server with `swiftc`, e.g.:
+  `SnapshotRunner` injects sample hosts/results **and a sample Datadog query/monitors** so no backend (and no `pup`) is needed. `AppEnvironment.isSnapshot` swaps the vibrancy blur for a solid color (ImageRenderer can't draw `NSViewRepresentable`). Set `BLOFELD_SNAPSHOT_SETTINGS=1` to render `GeneralSettingsView` instead of the panel — but note `ImageRenderer` can't draw `Toggle`/`Slider`, so those come out as placeholder boxes (fine for layout checks, not for marketing screenshots).
+- **Networking/logic tests** — compile the *real* source files against a mock with `swiftc`. For ServiceControl, a throwaway Python `http.server` mocks the API (URL encoding, error counting, ServicePulse-link building, SSO-wall detection). For Datadog, point **`BLOFELD_PUP_PATH`** at a tiny mock `pup` shell script that echoes canned `auth status` / `monitors search` JSON (use the **no-agent** shape: `monitors` at top level + a `counts.status` array), then:
   ```bash
-  swiftc -parse-as-library Sources/Blofeld/Models/ApiModels.swift \
-    Sources/Blofeld/Services/ServiceControlClient.swift test_main.swift -o /tmp/t && /tmp/t
+  swiftc -parse-as-library Sources/Blofeld/Services/PupClient.swift \
+    Sources/Blofeld/Models/Status.swift test_main.swift -o /tmp/t
+  BLOFELD_PUP_PATH=/tmp/mock/pup /tmp/t   # assert state mapping, monitor URLs, total/“+N more”, availability
   ```
-  A throwaway Python `http.server` is used to mock the ServiceControl API and assert URL encoding, error counting, ServicePulse-link building, and SSO-wall detection. There is no XCTest target.
-- **`BLOFELD_CONFIG_DIR`** overrides the storage directory. **Always set it when testing** — otherwise you will overwrite the user's real `config.json`. `ConfigStore` keeps a one-deep `config.backup.json` and recovers from it if the main file is corrupt.
+  This exercises `PupClient` end-to-end without touching Datadog. There is no XCTest target. (To smoke against the *real* `pup`, just leave `BLOFELD_PUP_PATH` unset — it resolves `/opt/homebrew/bin/pup`.)
+- **`BLOFELD_CONFIG_DIR`** overrides the storage directory. **Always set it when testing** — otherwise you will overwrite the user's real `config.json`. `ConfigStore` keeps a one-deep `config.backup.json` and recovers from it if the main file is corrupt. `BLOFELD_PUP_PATH` overrides the `pup` binary location (tests / non-standard installs).
 
 ## Architecture
 
@@ -53,17 +59,24 @@ SwiftUI app; `@main BlofeldApp` declares a `MenuBarExtra(...).menuBarExtraStyle(
 
 **`AppState` (`@MainActor ObservableObject`) is the hub** that every view and service talks to. Key design point: the panel is **derived from config**, not stored separately —
 
-- `config: AppConfig` (persisted) holds the user-edited hosts/endpoints/settings.
-- `results: [String: EndpointStatus]` keyed by `AppState.key(hostId, endpoint)` holds the latest poll data.
-- The computed `hosts: [HostStatus]` **merges config + results** — so editing config in Settings immediately reflects in the panel even before the next poll. `config`'s `didSet` persists, applies launch-at-login, and **debounces** a poll reschedule (editing a host name fires one change per keystroke).
+- `config: AppConfig` (persisted) holds the user-edited hosts/endpoints, **Datadog queries**, and settings.
+- `results: [String: EndpointStatus]` keyed by `AppState.key(hostId, endpoint)` holds the latest NServiceBus poll data; `monitorResults: [UUID: MonitorQueryStatus]` keyed by query id holds the latest Datadog poll data.
+- The computed `hosts: [HostStatus]` and `monitorQueries: [MonitorQueryStatus]` each **merge config + results** — so editing config in Settings immediately reflects in the panel even before the next poll. `config`'s `didSet` persists, applies launch-at-login, prunes stale results, and **debounces** a poll reschedule (editing a name fires one change per keystroke).
+- **`AppConfig` decodes defensively:** a hand-written `init(from:)` reads the new `datadogQueries` via `decodeIfPresent ?? []`, so configs written before Datadog support still load (a failed decode would drop the user back to `.default` and lose their hosts). Add any future field the same way.
 
-**Data flow:** `Poller` (async loop, re-reads the interval each tick) → `ServiceControlClient` (URLSession) → writes back via `AppState.applyResults` / `applyAuth`. `applyResults` also diffs against the previous count to fire `NotificationService` only when an endpoint's total increases, and logs to `EventLog`.
+**Data flow:** `Poller` (async loop, re-reads the interval each tick) polls **both** sources per tick:
+- NServiceBus: → `ServiceControlClient` (URLSession) → `AppState.applyResults` / `applyAuth`.
+- Datadog: → `PupClient` (subprocess) → `AppState.applyMonitorResults` / `setPupAvailability`.
+
+`applyResults` diffs against the previous count to fire `NotificationService.notifyIncrease` only when an endpoint's total increases; `applyMonitorResults` diffs the previous *alerting* monitor id-set to fire `NotificationService.notifyMonitorAlert` only when a monitor **newly** enters Alert. Both log to `EventLog`. The menu-bar badge (`menuBarBadgeCount`) and `isHealthy` combine NServiceBus errors + alerting monitors.
 
 **ServiceControl API** (`ServiceControlClient`): `GET /api/endpoints/<ep>/errors/?status=unresolved` (new = `number_of_processing_attempts == 1`, retried = `> 1`); `GET /api/recoverability/groups/Endpoint Name` resolves the group id by matching `title == endpoint`, used to build the ServicePulse deep link and the retry `POST .../groups/<id>/errors/retry`. The hosts sit behind an **OAuth2 Proxy**: a `401/403` or an HTML response means "needs auth" → `AuthManager` opens an in-app `WKWebView`, captures the `_oauth2_proxy` cookie, and copies it into `HTTPCookieStorage.shared` (shared with the client's URLSession).
 
+**Datadog via `pup`** (`PupClient`): the app's **only subprocess** — there is no Datadog HTTP client. Each call shells out to `pup` with three pinned global flags: **`--no-agent`** (deterministic JSON: pup's *agent* mode wraps results under a `data` envelope, *no-agent* puts `monitors` at the top level — the DTOs decode the no-agent shape), **`--read-only`** (pup can never write — the app only searches and opens links), and **`--output json`**. `pup auth status` → `availability()` returns `PupAvailability.ok(site:)` / `.notInstalled` / `.notAuthenticated` / `.error`; `pup monitors search --query <Q> --per-page <N>` → `searchMonitors()` maps monitors (`status` → `MonitorState`, browser link `https://app.<site>/monitors/<id>`) and reads `counts.status` for the true total (so the panel's "+N more" is accurate beyond the fetched page). The `Poller` sorts alerting-first then caps to a display limit before storing. **Binary resolution:** a LaunchServices-launched `.app` has a minimal PATH and doesn't read `~/.zshrc`, so `PupClient.resolvePath()` checks `BLOFELD_PUP_PATH` (test override) then `/opt/homebrew/bin/pup`, `/usr/local/bin/pup`, `/usr/bin/pup`. pup persists its own site/credentials, so no `DD_SITE` is required at runtime. (Process execution is allowed: the app is **not** sandboxed — entitlements only declare `network.client`.)
+
 **Storage** all goes through `AppPaths` (honors `BLOFELD_CONFIG_DIR`): `config.json` + backup (`ConfigStore`) and `blofeld.log` (`EventLog`, which also feeds the in-panel Activity popover).
 
-`Views/` holds the panel (`IslandPanelView`, `EndpointRowView`), `SettingsView`, and design tokens (`Theme`). `AppAssets` renders the menu-bar icon from the **vector SVG** (not the PNG) so it stays crisp as an auto-inverting template image. It resolves the SwiftPM resource bundle from `Bundle.main.resourceURL` (where `build-app.sh` copies it, into `Contents/Resources/`), **not** via `Bundle.module` — the generated `Bundle.module` accessor looks at the `.app` root and `fatalError`s when the bundle isn't there. Keep `build-app.sh`'s copy step and `AppAssets`'s lookup in sync.
+`Views/` holds the panel (`IslandPanelView`, `EndpointRowView`, `MonitorRowView`/`MonitorQuerySection`), `SettingsView` (the `.datadog` sidebar entry → `DatadogSettingsView` query editor + the General ▸ **Datadog CLI (pup)** diagnostics card), and design tokens (`Theme`). `AppAssets` renders the menu-bar icon from the **vector SVG** (not the PNG) so it stays crisp as an auto-inverting template image. It resolves the SwiftPM resource bundle from `Bundle.main.resourceURL` (where `build-app.sh` copies it, into `Contents/Resources/`), **not** via `Bundle.module` — the generated `Bundle.module` accessor looks at the `.app` root and `fatalError`s when the bundle isn't there. Keep `build-app.sh`'s copy step and `AppAssets`'s lookup in sync.
 
 ## MenuBarExtra(.window) gotchas — do not reintroduce
 
@@ -73,4 +86,5 @@ These caused real bugs; the constraints are load-bearing:
 - **No bare `ScrollView`** for the host list. A `ScrollView` with only a `maxHeight` collapses to ~0 height inside the menu-bar window and the body goes blank — render the content directly so the panel sizes to it.
 - **Settings uses `HSplitView`, not `NavigationSplitView`** — the latter's title-bar-integrated sidebar toggle overlaps the window's traffic-light controls.
 - The panel forces the arrow cursor via `.onContinuousHover` because SwiftUI text content otherwise shows an I-beam over the whole (non-editable) panel.
-- Editing hosts uses **id-based bindings** (resolve `HostConfig`/`EndpointConfig` by `id`), never array-index bindings — index bindings crash when the array shrinks.
+- Editing hosts uses **id-based bindings** (resolve `HostConfig`/`EndpointConfig` by `id`), never array-index bindings — index bindings crash when the array shrinks. The Datadog query editor follows the same rule via `ForEach($state.config.datadogQueries)` (Identifiable element bindings) + remove-by-id.
+- Monitor rows use the same **static** `StatusDot` (no `repeatForever`); broad Datadog queries are bounded by the per-query display cap (sorted alerting-first in the `Poller` so alerts are never the ones dropped), keeping the panel height finite without a `ScrollView`.

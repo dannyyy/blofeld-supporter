@@ -4,6 +4,7 @@ import SwiftUI
 private enum SettingsSection: Hashable {
     case general
     case host(UUID)
+    case datadog
 }
 
 /// The preferences window (opened via the gear / SettingsLink / Cmd-,).
@@ -33,12 +34,16 @@ struct SettingsView: View {
                 Label("General", systemImage: "gearshape")
                     .tag(SettingsSection.general)
             }
-            Section("Monitored Hosts") {
+            Section("NServiceBus Hosts") {
                 ForEach(state.config.hosts) { host in
                     Label(host.name.isEmpty ? "Untitled host" : host.name,
                           systemImage: "server.rack")
                         .tag(SettingsSection.host(host.id))
                 }
+            }
+            Section("Datadog") {
+                Label("Monitors", systemImage: "bell.badge")
+                    .tag(SettingsSection.datadog)
             }
         }
         .listStyle(.sidebar)
@@ -86,6 +91,8 @@ struct SettingsView: View {
             } else {
                 placeholder
             }
+        case .datadog:
+            DatadogSettingsView()
         case nil:
             placeholder
         }
@@ -147,6 +154,7 @@ struct GeneralSettingsView: View {
             systemSection
             pollingSection
             NotificationDeliveryCard()
+            DatadogCliCard()
             diagnosticsSection
         }
         .padding(24)
@@ -405,6 +413,50 @@ private struct NotificationDeliveryCard: View {
     }
 }
 
+// MARK: - Datadog CLI diagnostics
+
+/// Shows whether the `pup` CLI is installed and authenticated, with a hint to
+/// install / sign in when it isn't. Blofeld shells out to `pup` (read-only) to
+/// read Datadog monitors.
+private struct DatadogCliCard: View {
+    @EnvironmentObject private var state: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SettingsSectionHeader(icon: "terminal.fill", tint: .green, title: "Datadog CLI (pup)")
+            SettingsCard {
+                HStack(spacing: 6) {
+                    Image(systemName: state.pupAvailability.isOk
+                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(state.pupAvailability.isOk ? Theme.ok : Theme.accent)
+                    Text(state.pupAvailability.label)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Re-check") { state.refreshPupAvailability() }
+                }
+                .padding(.vertical, 4)
+
+                if let hint = state.pupAvailability.hint {
+                    Divider().overlay(Theme.cardStroke).padding(.vertical, 4)
+                    Text(hint)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Theme.textTertiary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Text("Blofeld runs `pup monitors search` (read-only) to read your monitors. The Datadog site comes from your `pup auth login`.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.top, 4)
+            }
+        }
+        .onAppear { state.refreshPupAvailability() }
+    }
+}
+
 private extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self {
         min(max(self, range.lowerBound), range.upperBound)
@@ -456,5 +508,60 @@ private struct HostDetailView: View {
         }
         .formStyle(.grouped)
         .navigationTitle(host.name.isEmpty ? "Host" : host.name)
+    }
+}
+
+// MARK: - Datadog detail
+
+/// Editor for the Datadog monitor search queries. Each query has a friendly
+/// name and a `pup monitors search` query string. Uses `ForEach($collection)`
+/// element bindings (Identifiable, crash-safe on removal — same as endpoints).
+private struct DatadogSettingsView: View {
+    @EnvironmentObject private var state: AppState
+
+    var body: some View {
+        Form {
+            Section("Monitor Queries") {
+                if state.config.datadogQueries.isEmpty {
+                    Text("No queries yet. Add a monitor search query — every matching monitor shows in the panel.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach($state.config.datadogQueries) { $query in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            TextField("Display name", text: $query.name,
+                                      prompt: Text("Error queues"))
+                            Button {
+                                state.config.datadogQueries.removeAll { $0.id == query.id }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                            .help("Remove query")
+                        }
+                        TextField("Query", text: $query.query,
+                                  prompt: Text("team:blofeld status:alert"))
+                            .font(.system(.body, design: .monospaced))
+                    }
+                    .padding(.vertical, 2)
+                }
+                Button {
+                    state.config.datadogQueries.append(MonitorQueryConfig(name: "", query: ""))
+                } label: {
+                    Label("Add query", systemImage: "plus.circle")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            Section {
+                Text("Queries use Datadog monitor search syntax, e.g. `team:blofeld status:alert`, `tag:\"env:prod\"`, or `service:checkout`. Every matching monitor is shown with its state; open one in the browser to resolve it. Requires the `pup` CLI (see General ▸ Datadog CLI).")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Datadog Monitors")
     }
 }

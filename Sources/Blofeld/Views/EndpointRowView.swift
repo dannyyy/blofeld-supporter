@@ -25,6 +25,7 @@ struct EndpointRowView: View {
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .help(endpoint.name)   // full name on hover — names truncate middle
 
                 Spacer(minLength: 8)
 

@@ -16,6 +16,11 @@ final class AppState: ObservableObject {
     @Published private(set) var results: [String: EndpointStatus] = [:]
     /// Per-host authentication/reachability state, keyed by host id.
     @Published private(set) var authStates: [UUID: AuthState] = [:]
+    /// Latest Datadog monitor results, keyed by query id.
+    @Published private(set) var monitorResults: [UUID: MonitorQueryStatus] = [:]
+    /// Whether the `pup` CLI is installed & authenticated (drives the panel
+    /// banner and the Settings diagnostics box).
+    @Published private(set) var pupAvailability: PupAvailability = .unknown
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var isRefreshing: Bool = false
     /// Transient action-feedback messages shown in the panel.
@@ -27,13 +32,14 @@ final class AppState: ObservableObject {
     private let poller = Poller()
     private let authManager = AuthManager()
     private let client = ServiceControlClient()
+    private let pupClient = PupClient()
     private var rescheduleDebounce: Task<Void, Never>?
 
     init(startServices: Bool = true) {
         self.config = store.load() ?? .default
         poller.state = self
         guard startServices else { return }   // snapshot/preview: no network or login item
-        EventLog.shared.log(.info, "Blofeld started — \(config.hosts.count) host(s), polling every \(config.pollSeconds)s")
+        EventLog.shared.log(.info, "Blofeld started — \(config.hosts.count) host(s), \(config.datadogQueries.count) Datadog query(ies), polling every \(config.pollSeconds)s")
         NotificationService.shared.start()
         LaunchAtLogin.apply(config.launchAtLogin)
         poller.start()
@@ -54,10 +60,28 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The Datadog query/monitor tree the UI renders — derived from `config` +
+    /// `monitorResults` (same pattern as `hosts`), so query edits show instantly.
+    var monitorQueries: [MonitorQueryStatus] {
+        config.datadogQueries.map { query in
+            let name = query.name.isEmpty ? "Untitled query" : query.name
+            if var existing = monitorResults[query.id] {
+                existing.name = name
+                existing.query = query.query
+                return existing
+            }
+            return MonitorQueryStatus(id: query.id, name: name, query: query.query,
+                                      availability: pupAvailability)
+        }
+    }
+
     var totalErrors: Int { hosts.reduce(0) { $0 + $1.totalCount } }
     var totalNew: Int { hosts.reduce(0) { $0 + $1.newCount } }
+    var totalAlertingMonitors: Int { monitorQueries.reduce(0) { $0 + $1.alertCount } }
     var anyNeedsAuth: Bool { hosts.contains { $0.needsAuth } }
-    var isHealthy: Bool { totalErrors == 0 && !anyNeedsAuth }
+    /// Combined attention count shown on the menu-bar icon (errors + alerts).
+    var menuBarBadgeCount: Int { totalErrors + totalAlertingMonitors }
+    var isHealthy: Bool { totalErrors == 0 && totalAlertingMonitors == 0 && !anyNeedsAuth }
 
     static func key(_ hostId: UUID, _ endpoint: String) -> String {
         "\(hostId.uuidString)/\(endpoint)"
@@ -153,6 +177,28 @@ final class AppState: ObservableObject {
         authStates[hostId] = auth
     }
 
+    func setPupAvailability(_ availability: PupAvailability) {
+        pupAvailability = availability
+    }
+
+    /// Re-checks the `pup` CLI off the poll loop (Settings diagnostics box).
+    func refreshPupAvailability() {
+        Task { self.pupAvailability = await pupClient.availability() }
+    }
+
+    func applyMonitorResults(queryId: UUID, status: MonitorQueryStatus) {
+        if config.notificationsEnabled, status.availability.isOk,
+           let previous = monitorResults[queryId], previous.availability.isOk {
+            // Notify only for monitors that *newly* entered Alert since the last
+            // successful poll — no spam on first poll or steady state.
+            let priorAlerting = Set(previous.monitors.filter { $0.state == .alert }.map(\.id))
+            for monitor in status.monitors where monitor.state == .alert && !priorAlerting.contains(monitor.id) {
+                NotificationService.shared.notifyMonitorAlert(monitor: monitor.name, query: status.name)
+            }
+        }
+        monitorResults[queryId] = status
+    }
+
     // MARK: - Config changes
 
     private func onConfigChanged(from old: AppConfig) {
@@ -160,8 +206,9 @@ final class AppState: ObservableObject {
         if old.launchAtLogin != config.launchAtLogin {
             LaunchAtLogin.apply(config.launchAtLogin)
         }
-        if old.pollSeconds != config.pollSeconds || old.hosts != config.hosts {
-            // Drop results for endpoints that no longer exist.
+        if old.pollSeconds != config.pollSeconds || old.hosts != config.hosts
+            || old.datadogQueries != config.datadogQueries {
+            // Drop results for endpoints / queries that no longer exist.
             pruneResults()
             // Debounce: editing a host name/URL fires a change per keystroke —
             // coalesce so we re-poll once the user pauses, not on every letter.
@@ -181,5 +228,7 @@ final class AppState: ObservableObject {
         results = results.filter { valid.contains($0.key) }
         let validHosts = Set(config.hosts.map { $0.id })
         authStates = authStates.filter { validHosts.contains($0.key) }
+        let validQueries = Set(config.datadogQueries.map { $0.id })
+        monitorResults = monitorResults.filter { validQueries.contains($0.key) }
     }
 }

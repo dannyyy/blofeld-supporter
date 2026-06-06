@@ -8,7 +8,13 @@ import Foundation
 final class Poller {
     weak var state: AppState?
     private let client = ServiceControlClient()
+    private let pup = PupClient()
     private var loop: Task<Void, Never>?
+
+    /// Monitors fetched per query (a page large enough to count alerts among
+    /// many matches) vs. how many are kept/shown after the alerting-first sort.
+    private static let fetchCap = 100
+    private static let displayCap = 25
 
     func start() {
         reschedule()
@@ -34,7 +40,8 @@ final class Poller {
     private func pollAll() async {
         guard let state else { return }
         let hosts = state.config.hosts
-        guard !hosts.isEmpty else {
+        let queries = state.config.datadogQueries
+        guard !hosts.isEmpty || !queries.isEmpty else {
             state.markUpdated()
             return
         }
@@ -42,6 +49,7 @@ final class Poller {
         for host in hosts {
             await poll(host: host)
         }
+        await pollDatadog(queries: queries)
         state.markUpdated()
         state.setRefreshing(false)
     }
@@ -85,6 +93,65 @@ final class Poller {
             let message = ServiceControlClient.describe(error)
             state.applyAuth(hostId: host.id, .error(message))
             EventLog.shared.log(.error, "\(host.name): poll failed — \(message)")
+        }
+    }
+
+    // MARK: - Datadog monitors (via the pup CLI)
+
+    private func pollDatadog(queries: [MonitorQueryConfig]) async {
+        guard let state, !queries.isEmpty else { return }
+
+        let availability = await pup.availability()
+        state.setPupAvailability(availability)
+
+        // If pup isn't usable, surface the reason on every query and stop.
+        guard case .ok(let site) = availability else {
+            for query in queries {
+                state.applyMonitorResults(queryId: query.id, status: MonitorQueryStatus(
+                    id: query.id, name: query.name, query: query.query, availability: availability))
+            }
+            EventLog.shared.log(.info, "Datadog: pup unavailable — \(PupAvailability.describe(availability))")
+            return
+        }
+
+        for query in queries {
+            await poll(query: query, site: site)
+        }
+    }
+
+    private func poll(query: MonitorQueryConfig, site: String) async {
+        guard let state else { return }
+        let trimmed = query.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            state.applyMonitorResults(queryId: query.id, status: MonitorQueryStatus(
+                id: query.id, name: query.name, query: query.query, availability: .ok(site: site)))
+            return
+        }
+        do {
+            let result = try await pup.searchMonitors(query: trimmed, site: site, perPage: Self.fetchCap)
+            // Sort alerting-first, then keep the display cap; report the rest as
+            // "+N more" relative to the *total* the query matched.
+            let sorted = result.monitors.sorted { a, b in
+                if a.state.sortRank != b.state.sortRank { return a.state.sortRank < b.state.sortRank }
+                return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+            }
+            let kept = Array(sorted.prefix(Self.displayCap))
+            let truncated = max(0, result.totalMatched - kept.count)
+            let status = MonitorQueryStatus(
+                id: query.id, name: query.name, query: query.query,
+                monitors: kept, availability: .ok(site: site), truncatedBy: truncated)
+            state.applyMonitorResults(queryId: query.id, status: status)
+            EventLog.shared.log(.info, "\(query.name): \(result.totalMatched) monitor(s) matched, \(status.alertCount) alerting")
+        } catch PupError.notAuthenticated {
+            state.setPupAvailability(.notAuthenticated)
+            state.applyMonitorResults(queryId: query.id, status: MonitorQueryStatus(
+                id: query.id, name: query.name, query: query.query, availability: .notAuthenticated))
+            EventLog.shared.log(.info, "\(query.name): Datadog authentication required")
+        } catch {
+            let message = PupClient.describe(error)
+            state.applyMonitorResults(queryId: query.id, status: MonitorQueryStatus(
+                id: query.id, name: query.name, query: query.query, availability: .error(message)))
+            EventLog.shared.log(.error, "\(query.name): Datadog query failed — \(message)")
         }
     }
 }

@@ -2,17 +2,47 @@ import Foundation
 
 /// Persisted application configuration. Encoded as JSON in Application Support.
 struct AppConfig: Codable, Equatable {
+    /// NServiceBus / ServiceControl hosts to observe.
     var hosts: [HostConfig]
+    /// Datadog monitor search queries to observe (via the `pup` CLI).
+    var datadogQueries: [MonitorQueryConfig]
     var pollSeconds: Int
     var notificationsEnabled: Bool
     var launchAtLogin: Bool
 
     static let `default` = AppConfig(
         hosts: [],
+        datadogQueries: [],
         pollSeconds: 60,
         notificationsEnabled: true,
         launchAtLogin: false
     )
+
+    init(
+        hosts: [HostConfig],
+        datadogQueries: [MonitorQueryConfig] = [],
+        pollSeconds: Int,
+        notificationsEnabled: Bool,
+        launchAtLogin: Bool
+    ) {
+        self.hosts = hosts
+        self.datadogQueries = datadogQueries
+        self.pollSeconds = pollSeconds
+        self.notificationsEnabled = notificationsEnabled
+        self.launchAtLogin = launchAtLogin
+    }
+
+    // Custom decode so configs written before Datadog support (no
+    // `datadogQueries` key) still load instead of failing the whole decode —
+    // which would drop the user back to `.default` and lose their hosts.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        hosts = try c.decode([HostConfig].self, forKey: .hosts)
+        datadogQueries = try c.decodeIfPresent([MonitorQueryConfig].self, forKey: .datadogQueries) ?? []
+        pollSeconds = try c.decode(Int.self, forKey: .pollSeconds)
+        notificationsEnabled = try c.decode(Bool.self, forKey: .notificationsEnabled)
+        launchAtLogin = try c.decode(Bool.self, forKey: .launchAtLogin)
+    }
 }
 
 /// One observed message broker: a ServiceControl API host plus the matching
@@ -52,6 +82,23 @@ struct EndpointConfig: Codable, Equatable, Identifiable {
     init(id: UUID = UUID(), name: String) {
         self.id = id
         self.name = name
+    }
+}
+
+/// One Datadog monitor search query to observe. Every monitor the query matches
+/// is shown in the panel (via `pup monitors search --query <query>`).
+/// Identifiable so the editor can add/remove rows without index-based bindings.
+struct MonitorQueryConfig: Codable, Equatable, Identifiable {
+    var id: UUID
+    /// Friendly label shown in the panel (e.g. "Error queues", "Checkout SLOs").
+    var name: String
+    /// The Datadog monitor search query, e.g. "team:blofeld status:alert".
+    var query: String
+
+    init(id: UUID = UUID(), name: String, query: String) {
+        self.id = id
+        self.name = name
+        self.query = query
     }
 }
 

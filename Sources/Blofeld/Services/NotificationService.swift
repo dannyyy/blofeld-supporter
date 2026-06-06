@@ -61,6 +61,20 @@ final class NotificationService: NSObject, ObservableObject, UNUserNotificationC
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// Fired when a Datadog monitor newly enters the Alert state.
+    func notifyMonitorAlert(monitor: String, query: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Monitor alerting"
+        content.body = "\(monitor) is now in alert (\(query))"
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
     /// Emit a one-off test notification and report success/failure via the log
     /// and `lastError`. Re-checks status afterwards so the panel stays current.
     func sendTestNotification() {

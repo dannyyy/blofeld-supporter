@@ -9,13 +9,13 @@ struct IslandPanelView: View {
             header
             Divider().overlay(Theme.cardStroke)
 
-            if state.hosts.isEmpty {
+            if state.hosts.isEmpty && state.monitorQueries.isEmpty {
                 emptyState
             } else {
                 // Rendered directly (no ScrollView): a ScrollView with only a
                 // maxHeight collapses to ~0 inside MenuBarExtra(.window), which
                 // left the body blank. The panel sizes to its content instead.
-                hostList
+                contentList
             }
 
             if !state.toasts.isEmpty {
@@ -38,6 +38,7 @@ struct IslandPanelView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
         .animation(Theme.spring, value: state.hosts)
+        .animation(Theme.spring, value: state.monitorQueries)
         // The panel has no editable text — force the normal arrow pointer instead
         // of the I-beam that SwiftUI text content otherwise shows.
         .onContinuousHover { phase in
@@ -50,10 +51,13 @@ struct IslandPanelView: View {
         }
     }
 
-    private var hostList: some View {
+    private var contentList: some View {
         VStack(spacing: Theme.spacing) {
             ForEach(state.hosts) { host in
                 HostSection(host: host)
+            }
+            ForEach(state.monitorQueries) { query in
+                MonitorQuerySection(query: query)
             }
         }
         .padding(Theme.padding)
@@ -87,12 +91,16 @@ struct IslandPanelView: View {
 
     private var statusLine: String {
         if state.anyNeedsAuth { return "Authentication required" }
-        if state.totalErrors == 0 { return "All endpoints healthy" }
-        return "\(state.totalNew) new · \(state.totalErrors) total errors"
+        if state.isHealthy { return "All clear" }
+        var parts: [String] = []
+        if state.totalErrors > 0 { parts.append("\(state.totalErrors) error\(state.totalErrors == 1 ? "" : "s")") }
+        if state.totalAlertingMonitors > 0 { parts.append("\(state.totalAlertingMonitors) alerting") }
+        return parts.isEmpty ? "All clear" : parts.joined(separator: " · ")
     }
 
     private var overallColor: Color {
         if state.anyNeedsAuth { return Theme.danger }
+        if state.totalAlertingMonitors > 0 { return Theme.danger }
         return state.totalErrors == 0 ? Theme.ok : Theme.accent
     }
 
@@ -147,10 +155,10 @@ struct IslandPanelView: View {
             Image(systemName: "tray")
                 .font(.system(size: 26, weight: .light))
                 .foregroundStyle(Theme.textTertiary)
-            Text("No hosts configured")
+            Text("Nothing to monitor yet")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Theme.textSecondary)
-            Text("Add a ServiceControl host and endpoints in Settings to start monitoring.")
+            Text("Add a ServiceControl host or a Datadog monitor query in Settings to start monitoring.")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textTertiary)
                 .multilineTextAlignment(.center)
