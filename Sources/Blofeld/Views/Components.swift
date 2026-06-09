@@ -78,6 +78,46 @@ struct WindowFronter: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+/// Keeps the `MenuBarExtra(.window)` host window sized to its content.
+///
+/// The panel has no fixed height — it sizes to its content. AppKit grows the
+/// hosting window when the content grows but never shrinks it back, so when
+/// alerting items resolve and disappear the window stays stretched, leaving
+/// gray dead-space below the footer. This reaches the hosting window (the same
+/// `view.window` trick `WindowFronter` uses) and resizes it to the content's
+/// fitting size, keeping the **top edge anchored** so it shrinks from the
+/// bottom (correct for a window that hangs down from the menu bar).
+///
+/// `trigger` exists only so SwiftUI re-invokes `updateNSView` when the content
+/// height changes — a representable with no inputs is not re-run on layout.
+struct MenuBarWindowResizer: NSViewRepresentable {
+    var trigger: CGFloat
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // ImageRenderer (snapshot mode) has no window — nothing to resize.
+        if AppEnvironment.isSnapshot { return }
+        DispatchQueue.main.async {
+            guard let window = nsView.window,
+                  let content = window.contentView else { return }
+            let fitting = content.fittingSize
+            guard fitting.height > 0 else { return }
+
+            let targetContent = NSRect(origin: .zero, size: fitting)
+            let newSize = window.frameRect(forContentRect: targetContent).size
+            let old = window.frame
+            // Negligible delta — skip to avoid churn / feedback loops.
+            if abs(newSize.height - old.height) < 0.5 { return }
+
+            var newFrame = old
+            newFrame.size = newSize
+            newFrame.origin.y = old.maxY - newSize.height // anchor the top edge
+            window.setFrame(newFrame, display: true, animate: false)
+        }
+    }
+}
+
 /// A borderless, hover-highlighting button used for footer actions.
 struct IconButton: View {
     let systemName: String
