@@ -3,6 +3,10 @@ import SwiftUI
 /// The custom dropdown panel that hangs off the menu bar — the "island".
 struct IslandPanelView: View {
     @EnvironmentObject private var state: AppState
+    // Drives MenuBarWindowResizer: the measured panel height, so the host
+    // window tracks the content in both directions (and shrinks back when
+    // alerting items resolve, instead of leaving gray dead-space below).
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,6 +30,22 @@ struct IslandPanelView: View {
             footer
         }
         .frame(width: Theme.panelWidth)
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onChange(of: proxy.size.height, initial: true) { _, newValue in
+                        contentHeight = newValue
+                    }
+            }
+        )
+        // Not added in snapshot mode: ImageRenderer can't draw an
+        // NSViewRepresentable and fills it with a placeholder, tinting the
+        // whole panel (same reason VisualEffectBlur is swapped below).
+        .background {
+            if !AppEnvironment.isSnapshot {
+                MenuBarWindowResizer(trigger: contentHeight)
+            }
+        }
         .background(
             ZStack {
                 if AppEnvironment.isSnapshot {
