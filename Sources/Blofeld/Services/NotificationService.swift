@@ -75,6 +75,21 @@ final class NotificationService: NSObject, ObservableObject, UNUserNotificationC
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// Fired when a Service Bus queue's dead-letter count increases.
+    func notifyDeadLetterIncrease(queue: String, namespace: String, delta: Int, total: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = "Dead letters in \(queue)"
+        let plural = delta == 1 ? "" : "s"
+        content.body = "+\(delta) dead-lettered message\(plural) (\(total) total) on \(namespace)"
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
     /// Emit a one-off test notification and report success/failure via the log
     /// and `lastError`. Re-checks status afterwards so the panel stays current.
     func sendTestNotification() {

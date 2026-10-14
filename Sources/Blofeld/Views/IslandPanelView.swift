@@ -13,7 +13,7 @@ struct IslandPanelView: View {
             header
             Divider().overlay(Theme.cardStroke)
 
-            if state.hosts.isEmpty && state.monitorQueries.isEmpty {
+            if state.hosts.isEmpty && state.serviceBusNamespaces.isEmpty && state.monitorQueries.isEmpty {
                 emptyState
             } else {
                 // Rendered directly (no ScrollView): a ScrollView with only a
@@ -58,6 +58,7 @@ struct IslandPanelView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
         .animation(Theme.spring, value: state.hosts)
+        .animation(Theme.spring, value: state.serviceBusNamespaces)
         .animation(Theme.spring, value: state.monitorQueries)
         // The panel has no editable text — force the normal arrow pointer instead
         // of the I-beam that SwiftUI text content otherwise shows.
@@ -75,6 +76,9 @@ struct IslandPanelView: View {
         VStack(spacing: Theme.spacing) {
             ForEach(state.hosts) { host in
                 HostSection(host: host)
+            }
+            ForEach(state.serviceBusNamespaces) { namespace in
+                ServiceBusNamespaceSection(namespace: namespace)
             }
             ForEach(state.monitorQueries) { query in
                 MonitorQuerySection(query: query)
@@ -114,6 +118,7 @@ struct IslandPanelView: View {
         if state.isHealthy { return "All clear" }
         var parts: [String] = []
         if state.totalErrors > 0 { parts.append("\(state.totalErrors) error\(state.totalErrors == 1 ? "" : "s")") }
+        if state.totalDeadLetters > 0 { parts.append("\(state.totalDeadLetters) dead-lettered") }
         if state.totalAlertingMonitors > 0 { parts.append("\(state.totalAlertingMonitors) alerting") }
         return parts.isEmpty ? "All clear" : parts.joined(separator: " · ")
     }
@@ -121,7 +126,7 @@ struct IslandPanelView: View {
     private var overallColor: Color {
         if state.anyNeedsAuth { return Theme.danger }
         if state.totalAlertingMonitors > 0 { return Theme.danger }
-        return state.totalErrors == 0 ? Theme.ok : Theme.accent
+        return state.totalErrors == 0 && state.totalDeadLetters == 0 ? Theme.ok : Theme.accent
     }
 
     // MARK: Footer
@@ -178,7 +183,7 @@ struct IslandPanelView: View {
             Text("Nothing to monitor yet")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Theme.textSecondary)
-            Text("Add a ServiceControl host or a Datadog monitor query in Settings to start monitoring.")
+            Text("Add a ServiceControl host, a Service Bus namespace or a Datadog monitor query in Settings to start monitoring.")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textTertiary)
                 .multilineTextAlignment(.center)

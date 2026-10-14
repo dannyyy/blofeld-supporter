@@ -6,6 +6,9 @@ struct AppConfig: Codable, Equatable {
     var hosts: [HostConfig]
     /// Datadog monitor search queries to observe (via the `pup` CLI).
     var datadogQueries: [MonitorQueryConfig]
+    /// Azure Service Bus namespaces whose queue dead-letter counts are observed
+    /// (via the `az` CLI).
+    var serviceBusNamespaces: [ServiceBusNamespaceConfig]
     /// The Datadog site `pup` should use (e.g. "datadoghq.eu"). Empty = auto-detect.
     /// A LaunchServices-launched app has no `DD_SITE` in its environment, so the
     /// app sets it explicitly per `pup` call rather than relying on the shell.
@@ -17,6 +20,7 @@ struct AppConfig: Codable, Equatable {
     static let `default` = AppConfig(
         hosts: [],
         datadogQueries: [],
+        serviceBusNamespaces: [],
         datadogSite: "",
         pollSeconds: 60,
         notificationsEnabled: true,
@@ -26,6 +30,7 @@ struct AppConfig: Codable, Equatable {
     init(
         hosts: [HostConfig],
         datadogQueries: [MonitorQueryConfig] = [],
+        serviceBusNamespaces: [ServiceBusNamespaceConfig] = [],
         datadogSite: String = "",
         pollSeconds: Int,
         notificationsEnabled: Bool,
@@ -33,20 +38,22 @@ struct AppConfig: Codable, Equatable {
     ) {
         self.hosts = hosts
         self.datadogQueries = datadogQueries
+        self.serviceBusNamespaces = serviceBusNamespaces
         self.datadogSite = datadogSite
         self.pollSeconds = pollSeconds
         self.notificationsEnabled = notificationsEnabled
         self.launchAtLogin = launchAtLogin
     }
 
-    // Custom decode so configs written before Datadog support (no
-    // `datadogQueries` / `datadogSite` keys) still load instead of failing the
+    // Custom decode so configs written before Datadog / Service Bus support (no
+    // `datadogQueries` / `datadogSite` / `serviceBusNamespaces` keys) still load instead of failing the
     // whole decode — which would drop the user back to `.default` and lose
     // their hosts. Add any future field the same way.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         hosts = try c.decode([HostConfig].self, forKey: .hosts)
         datadogQueries = try c.decodeIfPresent([MonitorQueryConfig].self, forKey: .datadogQueries) ?? []
+        serviceBusNamespaces = try c.decodeIfPresent([ServiceBusNamespaceConfig].self, forKey: .serviceBusNamespaces) ?? []
         datadogSite = try c.decodeIfPresent(String.self, forKey: .datadogSite) ?? ""
         pollSeconds = try c.decode(Int.self, forKey: .pollSeconds)
         notificationsEnabled = try c.decode(Bool.self, forKey: .notificationsEnabled)
@@ -134,6 +141,49 @@ struct MonitorQueryConfig: Codable, Equatable, Identifiable {
         self.id = id
         self.name = name
         self.query = query
+    }
+}
+
+/// One observed Azure Service Bus namespace: where it lives in Azure (needed by
+/// `az servicebus queue list`) and the queues whose dead-letter queues to watch.
+struct ServiceBusNamespaceConfig: Codable, Equatable, Identifiable {
+    var id: UUID
+    /// Friendly label shown in the UI (e.g. "Production bus").
+    var name: String
+    /// Azure subscription id (or name) the namespace belongs to.
+    var subscriptionId: String
+    var resourceGroup: String
+    /// The namespace name, i.e. the `<ns>` in `<ns>.servicebus.windows.net`.
+    var namespace: String
+    /// Queue names to observe.
+    var queues: [QueueConfig]
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        subscriptionId: String,
+        resourceGroup: String,
+        namespace: String,
+        queues: [QueueConfig]
+    ) {
+        self.id = id
+        self.name = name
+        self.subscriptionId = subscriptionId
+        self.resourceGroup = resourceGroup
+        self.namespace = namespace
+        self.queues = queues
+    }
+}
+
+/// A single Service Bus queue name to observe. Identifiable so the editor can
+/// add/remove rows safely without index-based bindings.
+struct QueueConfig: Codable, Equatable, Identifiable {
+    var id: UUID
+    var name: String
+
+    init(id: UUID = UUID(), name: String) {
+        self.id = id
+        self.name = name
     }
 }
 

@@ -9,6 +9,7 @@ final class Poller {
     weak var state: AppState?
     private let client = ServiceControlClient()
     private let pup = PupClient()
+    private let az = AzureCLIClient()
     private var loop: Task<Void, Never>?
 
     /// Monitors fetched per query (a page large enough to count alerts among
@@ -41,7 +42,8 @@ final class Poller {
         guard let state else { return }
         let hosts = state.config.hosts
         let queries = state.config.datadogQueries
-        guard !hosts.isEmpty || !queries.isEmpty else {
+        let namespaces = state.config.serviceBusNamespaces
+        guard !hosts.isEmpty || !queries.isEmpty || !namespaces.isEmpty else {
             state.markUpdated()
             return
         }
@@ -49,6 +51,7 @@ final class Poller {
         for host in hosts {
             await poll(host: host)
         }
+        await pollServiceBus(namespaces: namespaces)
         await pollDatadog(queries: queries)
         state.markUpdated()
         state.setRefreshing(false)
@@ -93,6 +96,63 @@ final class Poller {
             let message = ServiceControlClient.describe(error)
             state.applyAuth(hostId: host.id, .error(message))
             EventLog.shared.log(.error, "\(host.name): poll failed — \(message)")
+        }
+    }
+
+    // MARK: - Azure Service Bus dead letters (via the az CLI)
+
+    private func pollServiceBus(namespaces: [ServiceBusNamespaceConfig]) async {
+        guard let state, !namespaces.isEmpty else { return }
+
+        let availability = await az.availability()
+        state.setAzAvailability(availability)
+        // The namespace cards show the az banner themselves; just log and stop.
+        guard availability.isOk else {
+            EventLog.shared.log(.info, "Service Bus: az unavailable — \(availability.label)")
+            return
+        }
+
+        for ns in namespaces {
+            await poll(namespace: ns)
+        }
+    }
+
+    private func poll(namespace ns: ServiceBusNamespaceConfig) async {
+        guard let state else { return }
+        let resourceGroup = ns.resourceGroup.trimmingCharacters(in: .whitespacesAndNewlines)
+        let namespace = ns.namespace.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !resourceGroup.isEmpty, !namespace.isEmpty else {
+            state.applyNamespaceState(namespaceId: ns.id, .error("resource group and namespace are required"))
+            return
+        }
+        do {
+            let infos = try await az.queues(
+                subscription: ns.subscriptionId.trimmingCharacters(in: .whitespacesAndNewlines),
+                resourceGroup: resourceGroup, namespace: namespace)
+            var results: [String: QueueStatus] = [:]
+            for queue in ns.queues where !queue.name.isEmpty {
+                // Service Bus entity names are case-insensitive.
+                let info = infos.first { $0.name.caseInsensitiveCompare(queue.name) == .orderedSame }
+                results[AppState.key(ns.id, queue.name)] = info.map {
+                    QueueStatus(name: queue.name,
+                                deadLetterCount: $0.deadLetterCount,
+                                portalURL: AzureCLIClient.portalURL(resourceId: $0.resourceId),
+                                duplicateDetection: $0.duplicateDetection)
+                } ?? QueueStatus(name: queue.name, notFound: true)
+            }
+            state.applyQueueResults(namespaceId: ns.id, results: results, state: .ok)
+            let total = results.values.reduce(0) { $0 + $1.deadLetterCount }
+            let missing = results.values.filter(\.notFound).map(\.name)
+            EventLog.shared.log(.info, "\(ns.name): polled \(results.count) queue(s) — \(total) dead-lettered"
+                + (missing.isEmpty ? "" : ", not found: \(missing.joined(separator: ", "))"))
+        } catch AzError.notAuthenticated {
+            state.setAzAvailability(.notAuthenticated)
+            state.applyNamespaceState(namespaceId: ns.id, .unknown)
+            EventLog.shared.log(.info, "\(ns.name): Azure sign-in required")
+        } catch {
+            let message = AzureCLIClient.describe(error)
+            state.applyNamespaceState(namespaceId: ns.id, .error(message))
+            EventLog.shared.log(.error, "\(ns.name): Service Bus poll failed — \(message)")
         }
     }
 

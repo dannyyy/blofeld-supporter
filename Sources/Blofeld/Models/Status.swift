@@ -199,3 +199,89 @@ struct HostStatus: Identifiable, Equatable {
         self.authState = authState
     }
 }
+
+// MARK: - Azure Service Bus
+
+/// Live dead-letter status for a single observed Service Bus queue.
+struct QueueStatus: Identifiable, Equatable {
+    /// The queue name doubles as a stable identity within a namespace.
+    var id: String { name }
+    var name: String
+    var deadLetterCount: Int
+    /// Deep link into the Azure Portal's Service Bus Explorer for this queue.
+    var portalURL: URL?
+    /// Whether the queue has duplicate detection on (resubmit must then assign
+    /// a fresh MessageId, or the broker silently drops the copy).
+    var duplicateDetection: Bool
+    /// Set when the configured queue doesn't exist in the namespace.
+    var notFound: Bool
+
+    var hasDeadLetters: Bool { deadLetterCount > 0 }
+
+    init(name: String, deadLetterCount: Int = 0, portalURL: URL? = nil,
+         duplicateDetection: Bool = false, notFound: Bool = false) {
+        self.name = name
+        self.deadLetterCount = deadLetterCount
+        self.portalURL = portalURL
+        self.duplicateDetection = duplicateDetection
+        self.notFound = notFound
+    }
+}
+
+/// Whether the `az` CLI is usable for Service Bus queries.
+enum AzAvailability: Equatable {
+    case ok(user: String)
+    case notInstalled
+    case notAuthenticated
+    case error(String)
+    case unknown
+
+    var isOk: Bool { if case .ok = self { return true } else { return false } }
+
+    /// Short status label for the diagnostics box / panel banner.
+    var label: String {
+        switch self {
+        case .ok(let user): return "Installed & signed in (\(user))"
+        case .notInstalled: return "az CLI not found"
+        case .notAuthenticated: return "Not signed in"
+        case .error(let message): return message
+        case .unknown: return "Checking…"
+        }
+    }
+
+    /// A short remediation hint shown under the status, when applicable.
+    var hint: String? {
+        switch self {
+        case .notInstalled:
+            return "Install the Azure CLI:\n  brew install azure-cli"
+        case .notAuthenticated:
+            return "Sign in to Azure:\n  az login"
+        case .error:
+            return "Re-check after running:  az login"
+        case .ok, .unknown:
+            return nil
+        }
+    }
+}
+
+/// Live status for one Service Bus namespace (its queues + reachability).
+/// Derived (config + poll results), mirroring `HostStatus`.
+struct ServiceBusNamespaceStatus: Identifiable, Equatable {
+    let id: UUID
+    var name: String
+    var queues: [QueueStatus]
+    /// Reachability of the namespace (`.error` carries the az failure message).
+    var state: AuthState
+    var availability: AzAvailability
+
+    var totalDeadLetters: Int { queues.reduce(0) { $0 + $1.deadLetterCount } }
+
+    init(id: UUID, name: String, queues: [QueueStatus], state: AuthState = .unknown,
+         availability: AzAvailability = .unknown) {
+        self.id = id
+        self.name = name
+        self.queues = queues
+        self.state = state
+        self.availability = availability
+    }
+}

@@ -4,6 +4,7 @@ import SwiftUI
 private enum SettingsSection: Hashable {
     case general
     case host(UUID)
+    case serviceBus(UUID)
     case datadog
 }
 
@@ -41,6 +42,13 @@ struct SettingsView: View {
                         .tag(SettingsSection.host(host.id))
                 }
             }
+            Section("Azure Service Bus") {
+                ForEach(state.config.serviceBusNamespaces) { ns in
+                    Label(ns.name.isEmpty ? "Untitled namespace" : ns.name,
+                          systemImage: "tray.2")
+                        .tag(SettingsSection.serviceBus(ns.id))
+                }
+            }
             Section("Datadog") {
                 Label("Monitors", systemImage: "bell.badge")
                     .tag(SettingsSection.datadog)
@@ -49,20 +57,25 @@ struct SettingsView: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 0) {
-                Button(action: addHost) {
+                Menu {
+                    Button("Add NServiceBus host", action: addHost)
+                    Button("Add Service Bus namespace", action: addNamespace)
+                } label: {
                     Image(systemName: "plus")
                         .frame(width: 28, height: 24)
                 }
-                .buttonStyle(.borderless)
-                .help("Add host")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Add host or namespace")
 
-                Button(action: removeSelectedHost) {
+                Button(action: removeSelected) {
                     Image(systemName: "minus")
                         .frame(width: 28, height: 24)
                 }
                 .buttonStyle(.borderless)
-                .help("Remove selected host")
-                .disabled(!isHostSelected)
+                .help("Remove selected host or namespace")
+                .disabled(!isRemovableSelected)
 
                 Spacer()
             }
@@ -72,9 +85,11 @@ struct SettingsView: View {
         }
     }
 
-    private var isHostSelected: Bool {
-        if case .host = selection { return true }
-        return false
+    private var isRemovableSelected: Bool {
+        switch selection {
+        case .host, .serviceBus: return true
+        default: return false
+        }
     }
 
     // MARK: Detail
@@ -87,6 +102,13 @@ struct SettingsView: View {
         case .host(let id):
             if let binding = hostBinding(id) {
                 HostDetailView(host: binding)
+                    .id(id)
+            } else {
+                placeholder
+            }
+        case .serviceBus(let id):
+            if let binding = namespaceBinding(id) {
+                ServiceBusNamespaceDetailView(namespace: binding)
                     .id(id)
             } else {
                 placeholder
@@ -134,10 +156,41 @@ struct SettingsView: View {
         selection = .host(host.id)
     }
 
-    private func removeSelectedHost() {
-        guard case .host(let id) = selection else { return }
-        selection = .general                      // move selection away first
-        state.config.hosts.removeAll { $0.id == id }
+    /// Same id-based resolution as `hostBinding`, for Service Bus namespaces.
+    private func namespaceBinding(_ id: UUID) -> Binding<ServiceBusNamespaceConfig>? {
+        guard state.config.serviceBusNamespaces.contains(where: { $0.id == id }) else { return nil }
+        return Binding(
+            get: {
+                state.config.serviceBusNamespaces.first(where: { $0.id == id })
+                    ?? ServiceBusNamespaceConfig(name: "", subscriptionId: "", resourceGroup: "",
+                                                 namespace: "", queues: [])
+            },
+            set: { newValue in
+                if let idx = state.config.serviceBusNamespaces.firstIndex(where: { $0.id == id }) {
+                    state.config.serviceBusNamespaces[idx] = newValue
+                }
+            }
+        )
+    }
+
+    private func addNamespace() {
+        let ns = ServiceBusNamespaceConfig(name: "New Namespace", subscriptionId: "", resourceGroup: "",
+                                           namespace: "", queues: [])
+        state.config.serviceBusNamespaces.append(ns)
+        selection = .serviceBus(ns.id)
+    }
+
+    private func removeSelected() {
+        switch selection {
+        case .host(let id):
+            selection = .general                  // move selection away first
+            state.config.hosts.removeAll { $0.id == id }
+        case .serviceBus(let id):
+            selection = .general
+            state.config.serviceBusNamespaces.removeAll { $0.id == id }
+        default:
+            break
+        }
     }
 }
 
@@ -154,6 +207,7 @@ struct GeneralSettingsView: View {
             systemSection
             pollingSection
             NotificationDeliveryCard()
+            AzureCliCard()
             DatadogCliCard()
             diagnosticsSection
         }
@@ -475,6 +529,50 @@ private struct DatadogCliCard: View {
     }
 }
 
+// MARK: - Azure CLI diagnostics
+
+/// Shows whether the `az` CLI is installed and signed in. Blofeld shells out to
+/// `az` to read Service Bus queue counts and to get a data-plane token for
+/// resubmitting dead letters.
+private struct AzureCliCard: View {
+    @EnvironmentObject private var state: AppState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SettingsSectionHeader(icon: "cloud.fill", tint: .blue, title: "Azure CLI (az)")
+            SettingsCard {
+                HStack(spacing: 6) {
+                    Image(systemName: state.azAvailability.isOk
+                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(state.azAvailability.isOk ? Theme.ok : Theme.accent)
+                    Text(state.azAvailability.label)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Re-check") { state.refreshAzAvailability() }
+                }
+                .padding(.vertical, 4)
+
+                if let hint = state.azAvailability.hint {
+                    Divider().overlay(Theme.cardStroke).padding(.vertical, 4)
+                    Text(hint)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Theme.textTertiary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Text("Blofeld runs `az servicebus queue list` to read dead-letter counts (needs the Reader role on the namespace). Resubmitting dead letters uses a token from `az account get-access-token` and needs the Azure Service Bus Data Owner role.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.top, 4)
+            }
+        }
+        .onAppear { state.refreshAzAvailability() }
+    }
+}
+
 private extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self {
         min(max(self, range.lowerBound), range.upperBound)
@@ -526,6 +624,62 @@ private struct HostDetailView: View {
         }
         .formStyle(.grouped)
         .navigationTitle(host.name.isEmpty ? "Host" : host.name)
+    }
+}
+
+// MARK: - Service Bus namespace detail
+
+private struct ServiceBusNamespaceDetailView: View {
+    @Binding var namespace: ServiceBusNamespaceConfig
+
+    var body: some View {
+        Form {
+            Section("Connection") {
+                TextField("Display name", text: $namespace.name)
+                TextField("Subscription ID", text: $namespace.subscriptionId,
+                          prompt: Text("00000000-0000-0000-0000-000000000000"))
+                TextField("Resource group", text: $namespace.resourceGroup,
+                          prompt: Text("rg-messaging-prod"))
+                TextField("Namespace", text: $namespace.namespace,
+                          prompt: Text("my-namespace (without .servicebus.windows.net)"))
+            }
+
+            Section("Queues") {
+                if namespace.queues.isEmpty {
+                    Text("No queues yet. Add the queue names whose dead-letter queue you want to watch.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach($namespace.queues) { $queue in
+                    HStack {
+                        TextField("Queue name", text: $queue.name,
+                                  prompt: Text("order-processor"))
+                        Button {
+                            namespace.queues.removeAll { $0.id == queue.id }
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Remove queue")
+                    }
+                }
+                Button {
+                    namespace.queues.append(QueueConfig(name: ""))
+                } label: {
+                    Label("Add queue", systemImage: "plus.circle")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            Section {
+                Text("Counts are read with the `az` CLI (see General ▸ Azure CLI). Leave the subscription empty to use the active `az account`.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle(namespace.name.isEmpty ? "Namespace" : namespace.name)
     }
 }
 

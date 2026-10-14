@@ -125,61 +125,19 @@ struct PupClient {
 
     // MARK: - Process runner
 
-    private struct RunResult { let code: Int32; let stdout: Data; let stderr: String }
-
-    private func run(path: String, args: [String], site: String? = nil, timeout: TimeInterval = 25) async throws -> RunResult {
+    private func run(path: String, args: [String], site: String? = nil, timeout: TimeInterval = 25) async throws -> CLIRunner.Result {
         let fullArgs = args + ["--no-agent", "--read-only", "--output", "json"]
         // A LaunchServices-launched app inherits the launchd environment, which
         // has no DD_SITE — so set it explicitly here (pup picks the credentials
         // for that site). An empty/nil site leaves pup on its default site.
         var environment = ProcessInfo.processInfo.environment
         if let site, !site.isEmpty { environment["DD_SITE"] = site }
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: path)
-                process.arguments = fullArgs
-                process.environment = environment
-
-                let outPipe = Pipe()
-                let errPipe = Pipe()
-                process.standardOutput = outPipe
-                process.standardError = errPipe
-
-                do {
-                    try process.run()
-                } catch {
-                    continuation.resume(throwing: PupError.failed("could not launch pup: \(error.localizedDescription)"))
-                    return
-                }
-
-                // Watchdog: terminate a hung process so a slow query can't wedge
-                // polling. `didTimeout` is read on this worker thread and written
-                // on the watchdog thread, so it's guarded by a serial queue.
-                let flagQ = DispatchQueue(label: "com.danflash.blofeld.pup.timeout")
-                var didTimeout = false
-                let watchdog = DispatchWorkItem {
-                    if process.isRunning {
-                        flagQ.sync { didTimeout = true }
-                        process.terminate()
-                    }
-                }
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
-
-                // pup's stderr is tiny (a refresh notice or a short error), so a
-                // sequential drain after the large stdout won't fill its 64K pipe.
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                watchdog.cancel()
-
-                if flagQ.sync(execute: { didTimeout }) {
-                    continuation.resume(throwing: PupError.timedOut)
-                    return
-                }
-                let errString = String(data: errData, encoding: .utf8) ?? ""
-                continuation.resume(returning: RunResult(code: process.terminationStatus, stdout: outData, stderr: errString))
-            }
+        do {
+            return try await CLIRunner.run(path: path, args: fullArgs, environment: environment, timeout: timeout)
+        } catch CLIRunner.Failure.timedOut {
+            throw PupError.timedOut
+        } catch CLIRunner.Failure.launch(let message) {
+            throw PupError.failed("could not launch pup: \(message)")
         }
     }
 }

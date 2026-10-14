@@ -15,6 +15,7 @@ enum SnapshotRunner {
         let hostId = UUID()
         let healthyId = UUID()
         let queryId = UUID()
+        let namespaceId = UUID()
         state.config = AppConfig(
             hosts: [
                 HostConfig(id: hostId, name: "Production",
@@ -28,6 +29,13 @@ enum SnapshotRunner {
             datadogQueries: [
                 MonitorQueryConfig(id: queryId, name: "Blofeld team", query: "team:blofeld status:alert")
             ],
+            serviceBusNamespaces: [
+                ServiceBusNamespaceConfig(id: namespaceId, name: "Production bus",
+                                          subscriptionId: "sub", resourceGroup: "rg",
+                                          namespace: "prod-bus",
+                                          queues: [QueueConfig(name: "payment-gateway"),
+                                                   QueueConfig(name: "shipping-service")])
+            ],
             pollSeconds: 60, notificationsEnabled: true, launchAtLogin: false)
 
         state.applyResults(hostId: hostId, results: [
@@ -40,6 +48,13 @@ enum SnapshotRunner {
         state.applyResults(hostId: healthyId, results: [
             AppState.key(healthyId, "checkout-service"): EndpointStatus(name: "checkout-service")
         ], auth: .ok)
+        state.setAzAvailability(.ok(user: "someone@example.com"))
+        state.applyQueueResults(namespaceId: namespaceId, results: [
+            AppState.key(namespaceId, "payment-gateway"): QueueStatus(
+                name: "payment-gateway", deadLetterCount: 12,
+                portalURL: URL(string: "https://portal.azure.com/#resource/x/explorer")),
+            AppState.key(namespaceId, "shipping-service"): QueueStatus(name: "shipping-service")
+        ], state: .ok)
         state.setPupAvailability(.ok(site: "datadoghq.eu"))
         state.applyMonitorResults(queryId: queryId, status: MonitorQueryStatus(
             id: queryId, name: "Blofeld team", query: "team:blofeld status:alert",
