@@ -43,7 +43,7 @@ struct IslandPanelView: View {
         // whole panel (same reason VisualEffectBlur is swapped below).
         .background {
             if !AppEnvironment.isSnapshot {
-                MenuBarWindowResizer(trigger: contentHeight)
+                MenuBarWindowResizer(height: contentHeight)
             }
         }
         .background(

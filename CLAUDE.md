@@ -21,7 +21,7 @@ swift build -c release          # compile (uses the active toolchain)
 open ./Blofeld.app              # launch (menu-bar app, no Dock icon)
 ```
 
-- **Toolchain:** the active toolchain is Command Line Tools (`xcode-select -p` → `/Library/Developer/CommandLineTools`). Its macOS SDK has SwiftUI/AppKit/WebKit, so `swift build` works **without** Xcode. Full Xcode is installed but its **license is not accepted** (`xcodebuild` fails); to use it run `sudo xcodebuild -license accept` then `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./build-app.sh`.
+- **Toolchain:** the active toolchain is Command Line Tools (`xcode-select -p` → `/Library/Developer/CommandLineTools`), but its macOS 27 version ships **without the `SwiftUIMacros` compiler plugin**, so a bare `swift build` fails on every `@State`. `build-app.sh` and `just compile` therefore set `DEVELOPER_DIR` to Xcode (`/Applications/Xcode.app/Contents/Developer`) when unset. For an ad-hoc `swift build`/`swiftc`, prefix it with that `DEVELOPER_DIR` (or switch globally with `sudo xcode-select -s /Applications/Xcode.app`).
 - `build-app.sh` is plain ASCII on purpose — macOS `/bin/bash` 3.2 mis-parses UTF‑8 next to `$variables`.
 - Always relaunch with `open ./Blofeld.app` (not the inner binary directly) — the SwiftUI `Settings` scene and the `MenuBarExtra` only behave correctly under a proper LaunchServices launch.
 

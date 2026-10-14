@@ -14,7 +14,7 @@ default:
 
 # Quick compile only (no .app bundle). Fast feedback loop.
 compile:
-    swift build -c release
+    DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}" swift build -c release
 
 # Build and assemble Blofeld.app (ad-hoc signed) for local use.
 build:

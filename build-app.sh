@@ -10,10 +10,13 @@ APP_NAME="Blofeld"
 BUNDLE_DIR="${APP_NAME}.app"
 CONFIG="release"
 
-# Builds with whatever toolchain is active (Command Line Tools is sufficient --
-# its macOS SDK provides SwiftUI/AppKit/WebKit). To use the full Xcode toolchain
-# instead, accept its license once ("sudo xcodebuild -license accept") and run:
-#   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer ./build-app.sh
+# Prefers the full Xcode toolchain when installed: the Command Line Tools
+# (macOS 27) ship without the SwiftUIMacros compiler plugin, so every @State
+# fails to compile there. An explicit DEVELOPER_DIR always wins.
+XCODE_DEV="/Applications/Xcode.app/Contents/Developer"
+if [[ -z "${DEVELOPER_DIR:-}" && -d "$XCODE_DEV" ]]; then
+    export DEVELOPER_DIR="$XCODE_DEV"
+fi
 
 echo "-> Building (${CONFIG})"
 swift build -c "$CONFIG"

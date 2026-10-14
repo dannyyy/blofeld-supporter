@@ -84,35 +84,88 @@ struct WindowFronter: NSViewRepresentable {
 /// hosting window when the content grows but never shrinks it back, so when
 /// alerting items resolve and disappear the window stays stretched, leaving
 /// gray dead-space below the footer. This reaches the hosting window (the same
-/// `view.window` trick `WindowFronter` uses) and resizes it to the content's
-/// fitting size, keeping the **top edge anchored** so it shrinks from the
-/// bottom (correct for a window that hangs down from the menu bar).
+/// `view.window` trick `WindowFronter` uses) and resizes it to `height`.
 ///
-/// `trigger` exists only so SwiftUI re-invokes `updateNSView` when the content
-/// height changes — a representable with no inputs is not re-run on layout.
+/// Two details are load-bearing:
+/// - **`height` is the SwiftUI-measured panel height**, not the content view's
+///   `fittingSize` — the latter, read in an async hop mid-animation, returned
+///   stale/intermediate sizes and left the window taller than the panel.
+/// - **The top edge is anchored to where the system placed the window on open**
+///   (captured on `didBecomeKey`), not to the window's current top. AppKit's
+///   own content-size updates keep the *bottom-left* origin fixed, which moves
+///   the top; anchoring to the current frame would lock in that drift and the
+///   panel crept down away from the menu bar across polls.
 struct MenuBarWindowResizer: NSViewRepresentable {
-    var trigger: CGFloat
+    var height: CGFloat
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSView { NSView() }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         // ImageRenderer (snapshot mode) has no window — nothing to resize.
         if AppEnvironment.isSnapshot { return }
-        DispatchQueue.main.async {
-            guard let window = nsView.window,
-                  let content = window.contentView else { return }
-            let fitting = content.fittingSize
-            guard fitting.height > 0 else { return }
+        context.coordinator.requestResize(of: nsView, to: height)
+    }
 
-            let targetContent = NSRect(origin: .zero, size: fitting)
-            let newSize = window.frameRect(forContentRect: targetContent).size
+    final class Coordinator {
+        private weak var observedWindow: NSWindow?
+        private var observer: NSObjectProtocol?
+        /// The window's top edge as positioned by the system when it opened.
+        private var anchorTop: CGFloat?
+        private var pendingHeight: CGFloat = 0
+        private var scheduled = false
+
+        deinit {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
+
+        /// Coalesces a burst of height changes (e.g. every frame of the spring
+        /// animation) into one resize that uses the latest height.
+        func requestResize(of view: NSView, to height: CGFloat) {
+            pendingHeight = height
+            guard !scheduled else { return }
+            scheduled = true
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self else { return }
+                self.scheduled = false
+                guard let window = view?.window else { return }
+                self.observe(window)
+                self.apply(to: window)
+            }
+        }
+
+        private func observe(_ window: NSWindow) {
+            guard observedWindow !== window else { return }
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observedWindow = window
+            anchorTop = window.frame.maxY
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { [weak self] note in
+                guard let self, let window = note.object as? NSWindow else { return }
+                // The panel just opened: the system has placed it under the
+                // status item, so this is the correct top edge.
+                self.anchorTop = window.frame.maxY
+                self.apply(to: window)
+            }
+        }
+
+        private func apply(to window: NSWindow) {
+            guard pendingHeight > 0 else { return }
             let old = window.frame
-            // Negligible delta — skip to avoid churn / feedback loops.
-            if abs(newSize.height - old.height) < 0.5 { return }
+            let contentRect = NSRect(x: 0, y: 0,
+                                     width: window.contentRect(forFrameRect: old).width,
+                                     height: pendingHeight)
+            let newSize = window.frameRect(forContentRect: contentRect).size
+            let top = anchorTop ?? old.maxY
+            // Negligible delta in both size and position — skip to avoid churn
+            // / feedback loops.
+            if abs(newSize.height - old.height) < 0.5 && abs(top - old.maxY) < 0.5 { return }
 
             var newFrame = old
             newFrame.size = newSize
-            newFrame.origin.y = old.maxY - newSize.height // anchor the top edge
+            newFrame.origin.y = top - newSize.height
             window.setFrame(newFrame, display: true, animate: false)
         }
     }
